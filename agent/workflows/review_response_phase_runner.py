@@ -378,13 +378,17 @@ class ReviewResponsePhaseRunner:
             state.phase = ReviewResponsePhase.FIX_LOOP.value
             return self._delegate_refix(state, inputs, "Independent review found new blocking work; re-fix is required before another verification pass.")
         state.approvals.ready_for_final_report = True
-        state.loop_gates.terminal_state = "approval_gate_ready"
-        state.loop_gates.terminal_reason = "Latest independent changed-review satisfied loop gates without required follow-up work."
-        state.phase = ReviewResponsePhase.FINAL_APPROVAL_GATE.value
+        state.approvals.final_report_approved = True
+        state.approvals.human_approval_required = False
+        state.loop_gates.approval_decision = "approved"
+        state.loop_gates.terminal_state = "finalization_approved"
+        state.loop_gates.terminal_reason = "Latest independent changed-review satisfied loop gates and auto-unlocked finalization."
+        state.phase = ReviewResponsePhase.FINALIZATION.value
         return ReviewResponseRunnerAction(
-            ReviewResponseRunnerActionType.FINALIZATION_LOCKED,
-            ReviewResponsePhase.FINAL_APPROVAL_GATE,
-            "Clean changed-review reached the final approval gate; commit/push/thread resolution still require approval.",
+            ReviewResponseRunnerActionType.FINALIZE,
+            ReviewResponsePhase.FINALIZATION,
+            "Clean changed-review auto-unlocked finalization; commit/push/thread resolution proceed without user confirmation.",
+            metadata={"terminal_args": _finalization_terminal_args(inputs)},
         )
 
     def _fix_loop(
@@ -419,25 +423,16 @@ class ReviewResponsePhaseRunner:
     ) -> ReviewResponseRunnerAction:
         if not self.finalization_allowed(state):
             return _locked_action(state, "Final approval gate conditions are incomplete.")
-        if inputs.final_report_approved is not True and not state.approvals.final_report_approved:
-            state.approvals.human_approval_required = True
-            state.loop_gates.approval_decision = "pending"
-            state.loop_gates.terminal_state = "awaiting_final_approval"
-            state.loop_gates.terminal_reason = "Loop gates passed; waiting for explicit final approval."
-            return ReviewResponseRunnerAction(
-                ReviewResponseRunnerActionType.FINALIZATION_LOCKED,
-                ReviewResponsePhase.FINAL_APPROVAL_GATE,
-                "Finalization remains locked until the final approval signal is present.",
-            )
         state.approvals.final_report_approved = True
+        state.approvals.human_approval_required = False
         state.loop_gates.approval_decision = "approved"
         state.loop_gates.terminal_state = "finalization_approved"
-        state.loop_gates.terminal_reason = "Explicit final approval received after clean loop gates."
+        state.loop_gates.terminal_reason = "Final approval gate auto-promoted to finalization for autonomous workflow execution."
         state.phase = ReviewResponsePhase.FINALIZATION.value
         return ReviewResponseRunnerAction(
             ReviewResponseRunnerActionType.FINALIZE,
             ReviewResponsePhase.FINALIZATION,
-            "Approval gate is clean; atomic commit/push finalization is now unlocked.",
+            "Approval gate is clean; atomic commit/push finalization auto-continues.",
             metadata={"terminal_args": _finalization_terminal_args(inputs)},
         )
 

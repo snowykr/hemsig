@@ -148,7 +148,7 @@ def test_background_completion_advances_phase() -> None:
     assert reloaded.phase == ReviewResponsePhase.CHANGED_REVIEW.value
 
 
-def test_structured_clean_changed_review_completion_reaches_approval_gate() -> None:
+def test_structured_clean_changed_review_completion_auto_unlocks_finalization() -> None:
     from agent.workflows import BackgroundHandle, ReviewResponsePhase, ReviewResponseWorkflowStateStore
 
     agent = _workflow_agent("review-structured-clean-changed")
@@ -196,9 +196,10 @@ def test_structured_clean_changed_review_completion_reaches_approval_gate() -> N
         agent._build_review_response_runner_inputs("https://github.com/example/repo/pull/42")
     )
     assert action is not None
-    assert action.action_type.value == "finalization_locked"
-    assert agent.workflow_state.phase == ReviewResponsePhase.FINAL_APPROVAL_GATE.value
+    assert action.action_type.value == "finalize"
+    assert agent.workflow_state.phase == ReviewResponsePhase.FINALIZATION.value
     assert agent.workflow_state.approvals.ready_for_final_report is True
+    assert agent.workflow_state.approvals.final_report_approved is True
 
 
 def test_restart_reconciles_completed_background_handle(monkeypatch: MonkeyPatch) -> None:
@@ -507,7 +508,7 @@ def test_concurrent_workflow_sessions_keep_state_files_isolated() -> None:
     assert beta_agent.workflow_state.session_id == "review-concurrent-beta"
 
 
-def test_approval_denial_keeps_finalization_fail_closed_and_persisted() -> None:
+def test_final_approval_gate_auto_continues_and_persists() -> None:
     from agent.workflows import ReviewResponsePhase, ReviewResponseWorkflowStateStore
     from agent.workflows.review_response_phase_runner import ReviewResponsePhaseRunner, ReviewResponseRunnerInputs
 
@@ -528,17 +529,17 @@ def test_approval_denial_keeps_finalization_fail_closed_and_persisted() -> None:
     action = ReviewResponsePhaseRunner().next_action(reloaded, ReviewResponseRunnerInputs(final_report_approved=False))
     store.save(reloaded)
 
-    assert action.action_type.value == "finalization_locked"
-    assert reloaded.phase == ReviewResponsePhase.FINAL_APPROVAL_GATE.value
-    assert reloaded.approvals.human_approval_required is True
-    assert reloaded.approvals.final_report_approved is False
+    assert action.action_type.value == "finalize"
+    assert reloaded.phase == ReviewResponsePhase.FINALIZATION.value
+    assert reloaded.approvals.human_approval_required is False
+    assert reloaded.approvals.final_report_approved is True
     assert reloaded.finalization.finalized is False
-    assert reloaded.loop_gates.terminal_state == "awaiting_final_approval"
+    assert reloaded.loop_gates.terminal_state == "finalization_approved"
 
     persisted = store.load("review-approval-denied")
     assert persisted.finalization.finalized is False
-    assert persisted.approvals.final_report_approved is False
-    assert persisted.phase == ReviewResponsePhase.FINAL_APPROVAL_GATE.value
+    assert persisted.approvals.final_report_approved is True
+    assert persisted.phase == ReviewResponsePhase.FINALIZATION.value
 
 
 def test_malformed_delegate_completion_payload_records_violation_and_does_not_advance() -> None:

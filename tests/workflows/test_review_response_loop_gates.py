@@ -82,12 +82,13 @@ def test_fix_verify_loop_repeats_until_gate() -> None:
             )
         ),
     )
-    assert action.action_type == ReviewResponseRunnerActionType.FINALIZATION_LOCKED
-    assert state.phase == ReviewResponsePhase.FINAL_APPROVAL_GATE.value
+    assert action.action_type == ReviewResponseRunnerActionType.FINALIZE
+    assert state.phase == ReviewResponsePhase.FINALIZATION.value
     assert state.loop_gates.requires_fix_pass is False
     assert state.loop_gates.requires_verification_pass is False
-    assert state.loop_gates.terminal_state == "approval_gate_ready"
+    assert state.loop_gates.terminal_state == "finalization_approved"
     assert state.approvals.ready_for_final_report is True
+    assert state.approvals.final_report_approved is True
     state.structured_results[ReviewResponsePhase.PR_ANALYSIS.value] = {
         "completed": True,
         "unresolved_review_threads": 0,
@@ -134,10 +135,11 @@ def test_verification_edit_resets_loop() -> None:
             )
         ),
     )
-    assert action.action_type == ReviewResponseRunnerActionType.FINALIZATION_LOCKED
+    assert action.action_type == ReviewResponseRunnerActionType.FINALIZE
     assert state.loop_gates.requires_verification_pass is False
     assert state.loop_gates.consecutive_no_edit_passes == 1
-    assert state.loop_gates.terminal_state == "approval_gate_ready"
+    assert state.loop_gates.terminal_state == "finalization_approved"
+    assert state.approvals.final_report_approved is True
     state.structured_results[ReviewResponsePhase.PR_ANALYSIS.value] = {
         "completed": True,
         "unresolved_review_threads": 0,

@@ -204,12 +204,13 @@ def test_runner_advances_by_phase_table() -> None:
             }
         ),
     )
-    assert action.action_type == ReviewResponseRunnerActionType.FINALIZATION_LOCKED
-    assert state.phase == ReviewResponsePhase.FINAL_APPROVAL_GATE.value
+    assert action.action_type == ReviewResponseRunnerActionType.FINALIZE
+    assert state.phase == ReviewResponsePhase.FINALIZATION.value
     assert state.approvals.ready_for_final_report is True
+    assert state.approvals.final_report_approved is True
 
 
-def test_finalization_locked_until_gate_is_clean() -> None:
+def test_finalization_auto_continues_once_gate_is_clean() -> None:
     state = ReviewResponseWorkflowStateStore().default_state("locked-finalization-session")
     runner = ReviewResponsePhaseRunner()
 
@@ -231,9 +232,12 @@ def test_finalization_locked_until_gate_is_clean() -> None:
     }
 
     action = runner.next_action(state, ReviewResponseRunnerInputs(final_report_approved=False))
-    assert action.action_type == ReviewResponseRunnerActionType.FINALIZATION_LOCKED
+    assert action.action_type == ReviewResponseRunnerActionType.FINALIZE
     assert state.finalization.finalized is False
     assert not state.violations
+    assert state.approvals.final_report_approved is True
+    assert state.approvals.human_approval_required is False
+    assert state.phase == ReviewResponsePhase.FINALIZATION.value
 
     action = runner.next_action(state, ReviewResponseRunnerInputs(final_report_approved=True))
     assert action.action_type == ReviewResponseRunnerActionType.FINALIZE
@@ -964,7 +968,7 @@ def test_run_conversation_does_not_resolve_threads_after_failed_finalization(mon
     assert agent.workflow_state.loop_gates.terminal_state == "finalization_failed"
 
 
-def test_run_conversation_consumes_explicit_final_approval_text(monkeypatch) -> None:
+def test_run_conversation_auto_continues_from_final_approval_gate(monkeypatch) -> None:
     from agent.workflows import activation_for_skill
     from run_agent import AIAgent
 
@@ -1022,7 +1026,7 @@ def test_run_conversation_consumes_explicit_final_approval_text(monkeypatch) -> 
     monkeypatch.setattr(agent, "_sync_external_memory_for_turn", lambda **_kwargs: None)
     monkeypatch.setattr(agent, "_spawn_background_review", lambda **_kwargs: None)
 
-    result = agent.run_conversation("I approve the final report for finalization")
+    result = agent.run_conversation("continue")
 
     assert executed_actions == ["finalize", "resolve_threads"]
     assert agent.workflow_state.approvals.final_report_approved is True
