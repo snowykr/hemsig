@@ -1863,6 +1863,7 @@ from agent.skill_commands import (
     scan_skill_commands,
     build_skill_invocation_message,
     build_preloaded_skills_prompt,
+    workflow_activation_for_skill_command,
 )
 
 _skill_commands = scan_skill_commands()
@@ -2200,6 +2201,7 @@ class HermesCLI:
 
         # Agent will be initialized on first use
         self.agent: Optional[AIAgent] = None
+        self._pending_workflow_activation = None
         self._app = None  # prompt_toolkit Application (set in run())
         
         # Conversation state
@@ -6625,10 +6627,16 @@ class HermesCLI:
             # Check for skill slash commands (/gif-search, /axolotl, etc.)
             elif base_cmd in _skill_commands:
                 user_instruction = cmd_original[len(base_cmd):].strip()
+                activation = workflow_activation_for_skill_command(base_cmd)
                 msg = build_skill_invocation_message(
                     base_cmd, user_instruction, task_id=self.session_id
                 )
                 if msg:
+                    if activation is not None:
+                        if self.agent is not None:
+                            self.agent.activate_workflow(activation)
+                        else:
+                            self._pending_workflow_activation = activation
                     skill_name = _skill_commands[base_cmd]["name"]
                     print(f"\n⚡ Loading skill: {skill_name}")
                     if hasattr(self, '_pending_input'):
@@ -9042,6 +9050,10 @@ class HermesCLI:
             request_overrides=turn_route.get("request_overrides"),
         ):
             return None
+
+        if self._pending_workflow_activation is not None and self.agent is not None:
+            self.agent.activate_workflow(self._pending_workflow_activation)
+            self._pending_workflow_activation = None
         
         # Route image attachments based on the active model's vision capability.
         # "native" → pass pixels as OpenAI-style content parts (adapters

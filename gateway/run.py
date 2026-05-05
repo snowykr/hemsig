@@ -5181,6 +5181,7 @@ class GatewayRunner:
                     get_skill_commands,
                     build_skill_invocation_message,
                     resolve_skill_command_key,
+                    workflow_activation_for_skill_command,
                 )
                 skill_cmds = get_skill_commands()
                 cmd_key = resolve_skill_command_key(command)
@@ -5199,10 +5200,13 @@ class GatewayRunner:
                                 f"Enable it with: `hermes skills config`"
                             )
                     user_instruction = event.get_command_args().strip()
+                    _workflow_activation = workflow_activation_for_skill_command(cmd_key)
                     msg = build_skill_invocation_message(
                         cmd_key, user_instruction, task_id=_quick_key
                     )
                     if msg:
+                        if _workflow_activation is not None:
+                            setattr(event, "workflow_activation", _workflow_activation)
                         event.text = msg
                         # Fall through to normal message processing with skill content
                 else:
@@ -6064,6 +6068,7 @@ class GatewayRunner:
                 run_generation=run_generation,
                 event_message_id=event.message_id,
                 channel_prompt=event.channel_prompt,
+                workflow_activation=getattr(event, "workflow_activation", None),
             )
 
             # Stop persistent typing indicator now that the agent is done
@@ -10753,6 +10758,13 @@ class GatewayRunner:
                 if agent_notify and not _pr_check.is_completion_consumed(session_id):
                     from tools.ansi_strip import strip_ansi
                     _out = strip_ansi(session.output_buffer[-2000:]) if session.output_buffer else ""
+                    self._ingest_workflow_background_completion_from_watcher(
+                        workflow_session_id=session_key,
+                        process_session_id=session_id,
+                        exit_code=session.exit_code,
+                        output=_out,
+                        command=session.command,
+                    )
                     synth_text = (
                         f"[IMPORTANT: Background process {session_id} completed "
                         f"(exit code {session.exit_code}).\n"
@@ -10846,6 +10858,47 @@ class GatewayRunner:
                         logger.error("Watcher delivery error: %s", e)
 
         logger.debug("Process watcher ended: %s", session_id)
+
+    def _ingest_workflow_background_completion_from_watcher(
+        self,
+        *,
+        workflow_session_id: str,
+        process_session_id: str,
+        exit_code: int | None,
+        output: str,
+        command: str,
+    ) -> None:
+        """Best-effort workflow-state update from the existing watcher path.
+
+        The injected watcher message remains authoritative for resuming cached or
+        newly-created agents. This store update is a no-op unless the workflow
+        state is keyed by the provided gateway session key (as in tests and some
+        non-gateway surfaces), and it never polls for background work.
+        """
+
+        if not workflow_session_id or not process_session_id:
+            return
+        try:
+            from agent.workflows import (
+                ReviewResponseWorkflowStateStore,
+                ingest_workflow_background_completion,
+            )
+
+            store = ReviewResponseWorkflowStateStore()
+            if not store.path_for_session(workflow_session_id).exists():
+                return
+            state = store.load(workflow_session_id)
+            if ingest_workflow_background_completion(
+                state,
+                handle_id=process_session_id,
+                exit_code=exit_code,
+                output=output,
+                command=command,
+                source="gateway_process_watcher",
+            ):
+                store.save(state)
+        except Exception as exc:
+            logger.debug("Workflow watcher completion ingestion failed: %s", exc, exc_info=True)
 
     _MAX_INTERRUPT_DEPTH = 3  # Cap recursive interrupt handling (#816)
 
@@ -11608,6 +11661,7 @@ class GatewayRunner:
         _interrupt_depth: int = 0,
         event_message_id: Optional[str] = None,
         channel_prompt: Optional[str] = None,
+        workflow_activation: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
         Run the agent with the given message and context.
@@ -12360,6 +12414,8 @@ class GatewayRunner:
                 _deliver_bg_review_message(message)
 
             agent.background_review_callback = _bg_review_send
+            if workflow_activation is not None:
+                agent.activate_workflow(workflow_activation)
             # Register the release hook on the adapter so base.py's finally
             # block can fire it after delivering the main response.
             if _status_adapter and session_key:
@@ -13330,6 +13386,7 @@ class GatewayRunner:
                     _interrupt_depth=_interrupt_depth + 1,
                     event_message_id=next_message_id,
                     channel_prompt=next_channel_prompt,
+                    workflow_activation=getattr(pending_event, "workflow_activation", None),
                 )
         finally:
             # Stop progress sender, interrupt monitor, and notification task

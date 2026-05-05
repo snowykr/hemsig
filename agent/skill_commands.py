@@ -4,11 +4,13 @@ Shared between CLI (cli.py) and gateway (gateway/run.py) so both surfaces
 can invoke skills via /skill-name commands.
 """
 
+from __future__ import annotations
+
 import json
 import logging
 import re
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from hermes_constants import display_hermes_home
 from agent.skill_preprocessing import (
@@ -16,6 +18,9 @@ from agent.skill_preprocessing import (
     load_skills_config as _load_skills_config,
     substitute_template_vars as _substitute_template_vars,
 )
+
+if TYPE_CHECKING:
+    from agent.workflows.activation import WorkflowActivation
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +48,7 @@ def _load_skill_payload(skill_identifier: str, task_id: str | None = None) -> tu
             normalized = raw_identifier.lstrip("/")
 
         loaded_skill = json.loads(
-            skill_view(normalized, task_id=task_id, preprocess=False)
+            skill_view(normalized, task_id=task_id or "", preprocess=False)
         )
     except Exception:
         return None
@@ -224,7 +229,7 @@ def scan_skill_commands() -> Dict[str, Dict[str, Any]]:
         from tools.skills_tool import SKILLS_DIR, _parse_frontmatter, skill_matches_platform, _get_disabled_skill_names
         from agent.skill_utils import get_external_skills_dirs, iter_skill_index_files
         disabled = _get_disabled_skill_names()
-        seen_names: set = set()
+        seen_names: set[str] = set()
 
         # Scan local dir first, then external dirs
         dirs_to_scan = []
@@ -413,6 +418,21 @@ def build_skill_invocation_message(
         runtime_note=runtime_note,
         session_id=task_id,
     )
+
+
+def workflow_activation_for_skill_command(cmd_key: str) -> WorkflowActivation | None:
+    """Return runtime workflow activation metadata for a targeted skill command.
+
+    The lookup is based on the resolved skill command/name only. It deliberately
+    avoids parsing skill body text so activation is deterministic and narrow.
+    """
+
+    commands = get_skill_commands()
+    skill_info = commands.get(cmd_key) or {}
+
+    from agent.workflows.activation import activation_for_skill
+
+    return activation_for_skill(skill_info.get("name") or cmd_key)
 
 
 def build_preloaded_skills_prompt(

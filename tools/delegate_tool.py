@@ -1606,6 +1606,7 @@ def _run_single_child(
             "task_index": task_index,
             "status": status,
             "summary": summary,
+            "child_session_id": str(getattr(child, "session_id", "") or ""),
             "api_calls": api_calls,
             "duration_seconds": duration,
             "model": _model if isinstance(_model, str) else None,
@@ -1818,6 +1819,13 @@ def delegate_task(
     acp_command: Optional[str] = None,
     acp_args: Optional[List[str]] = None,
     role: Optional[str] = None,
+    background: Optional[bool] = None,
+    notify_on_complete: Optional[bool] = None,
+    prompt_file: Optional[str] = None,
+    prompt_file_path: Optional[str] = None,
+    delivery_method: Optional[str] = None,
+    workflow_phase: Optional[str] = None,
+    delegation_type: Optional[str] = None,
     parent_agent=None,
 ) -> str:
     """
@@ -1836,6 +1844,36 @@ def delegate_task(
     """
     if parent_agent is None:
         return tool_error("delegate_task requires a parent agent context.")
+
+    if getattr(parent_agent, "_active_workflow_id", lambda: None)():
+        try:
+            from agent.workflows import enforce_workflow_tool_policy
+            policy_args = {
+                "goal": goal,
+                "context": context,
+                "toolsets": toolsets,
+                "tasks": tasks,
+                "background": background,
+                "notify_on_complete": notify_on_complete,
+                "prompt_file": prompt_file,
+                "prompt_file_path": prompt_file_path,
+                "delivery_method": delivery_method,
+                "workflow_phase": workflow_phase,
+                "delegation_type": delegation_type,
+            }
+            policy_result = enforce_workflow_tool_policy(
+                workflow_id=parent_agent._active_workflow_id(),
+                tool_name="delegate_task",
+                args=policy_args,
+                state=getattr(parent_agent, "workflow_state", None),
+            )
+            if policy_result.blocked:
+                if hasattr(parent_agent, "_persist_workflow_state"):
+                    parent_agent._persist_workflow_state()
+                return tool_error(policy_result.error or "Workflow delegate policy blocked execution.")
+        except Exception as exc:
+            logger.debug("Workflow delegate policy check failed: %s", exc, exc_info=True)
+            return tool_error("Workflow delegate policy check failed; refusing synchronous workflow delegation.")
 
     # Operator-controlled kill switch — lets the TUI freeze new fan-out
     # when a runaway tree is detected, without interrupting already-running
@@ -2524,6 +2562,13 @@ registry.register(
         acp_command=args.get("acp_command"),
         acp_args=args.get("acp_args"),
         role=args.get("role"),
+        background=args.get("background"),
+        notify_on_complete=args.get("notify_on_complete"),
+        prompt_file=args.get("prompt_file"),
+        prompt_file_path=args.get("prompt_file_path"),
+        delivery_method=args.get("delivery_method"),
+        workflow_phase=args.get("workflow_phase"),
+        delegation_type=args.get("delegation_type"),
         parent_agent=kw.get("parent_agent"),
     ),
     check_fn=check_delegate_requirements,
