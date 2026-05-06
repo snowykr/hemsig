@@ -61,6 +61,49 @@ def _default_task_id(arg: Optional[str]) -> Optional[str]:
     return env_tid or None
 
 
+def _worker_run_id(task_id: str) -> Optional[int]:
+    """Return this worker's dispatcher run id when it is scoped to task_id."""
+    if os.environ.get("HERMES_KANBAN_TASK") != task_id:
+        return None
+    raw = os.environ.get("HERMES_KANBAN_RUN_ID")
+    if not raw:
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        return None
+
+
+def _enforce_worker_task_ownership(tid: str) -> Optional[str]:
+    """Reject worker-driven destructive calls on foreign task IDs.
+
+    A process spawned by the dispatcher has ``HERMES_KANBAN_TASK`` set
+    to its own task id. Tools like ``kanban_complete`` / ``kanban_block``
+    / ``kanban_heartbeat`` mutate run-lifecycle state, so a buggy or
+    prompt-injected worker that passed an explicit ``task_id`` for some
+    other task could corrupt sibling or cross-tenant runs (see #19534).
+
+    Orchestrator profiles (kanban toolset enabled but **no**
+    ``HERMES_KANBAN_TASK`` in env) aren't subject to this check — their
+    job is routing, and they sometimes legitimately close out child
+    tasks or reopen blocked ones. Workers are narrowly scoped to their
+    one task.
+
+    Returns ``None`` when the call is allowed, or a tool-error string
+    when it must be rejected. Callers should ``return`` the error
+    verbatim.
+    """
+    env_tid = os.environ.get("HERMES_KANBAN_TASK")
+    if not env_tid:
+        # Orchestrator or CLI context — no task-scope restriction.
+        return None
+    if tid != env_tid:
+        return tool_error(
+            f"worker is scoped to task {env_tid}; refusing to mutate "
+            f"{tid}. Use kanban_comment to hand off information to other "
+            f"tasks, or kanban_create to spawn follow-up work."
+        )
+    return None
 def _connect():
     """Import + connect lazily so the module imports cleanly in non-kanban
     contexts (e.g. test rigs that import every tool module)."""
@@ -154,9 +197,21 @@ def _handle_complete(args: dict, **kw) -> str:
         return tool_error(
             "task_id is required (or set HERMES_KANBAN_TASK in the env)"
         )
+    ownership_err = _enforce_worker_task_ownership(tid)
+    if ownership_err:
+        return ownership_err
     summary = args.get("summary")
     metadata = args.get("metadata")
     result = args.get("result")
+    created_cards = args.get("created_cards")
+    if created_cards is not None:
+        if isinstance(created_cards, str):
+            created_cards = [created_cards]
+        if not isinstance(created_cards, (list, tuple)):
+            return tool_error(
+                f"created_cards must be a list of task ids, got {type(created_cards).__name__}"
+            )
+        created_cards = [str(card).strip() for card in created_cards if str(card).strip()]
     if not (summary or result):
         return tool_error(
             "provide at least one of: summary (preferred), result"
@@ -171,6 +226,8 @@ def _handle_complete(args: dict, **kw) -> str:
             ok = kb.complete_task(
                 conn, tid,
                 result=result, summary=summary, metadata=metadata,
+                created_cards=created_cards,
+                expected_run_id=_worker_run_id(tid),
             )
             if not ok:
                 return tool_error(
@@ -192,13 +249,20 @@ def _handle_block(args: dict, **kw) -> str:
         return tool_error(
             "task_id is required (or set HERMES_KANBAN_TASK in the env)"
         )
+    ownership_err = _enforce_worker_task_ownership(tid)
+    if ownership_err:
+        return ownership_err
     reason = args.get("reason")
     if not reason or not str(reason).strip():
         return tool_error("reason is required — explain what input you need")
     try:
         kb, conn = _connect()
         try:
-            ok = kb.block_task(conn, tid, reason=reason)
+            ok = kb.block_task(
+                conn, tid,
+                reason=reason,
+                expected_run_id=_worker_run_id(tid),
+            )
             if not ok:
                 return tool_error(
                     f"could not block {tid} (unknown id or not in "
@@ -220,11 +284,19 @@ def _handle_heartbeat(args: dict, **kw) -> str:
         return tool_error(
             "task_id is required (or set HERMES_KANBAN_TASK in the env)"
         )
+    ownership_err = _enforce_worker_task_ownership(tid)
+    if ownership_err:
+        return ownership_err
     note = args.get("note")
     try:
         kb, conn = _connect()
         try:
-            ok = kb.heartbeat_worker(conn, tid, note=note)
+            ok = kb.heartbeat_worker(
+                conn,
+                tid,
+                note=note,
+                expected_run_id=_worker_run_id(tid),
+            )
             if not ok:
                 return tool_error(
                     f"could not heartbeat {tid} (unknown id or not running)"
