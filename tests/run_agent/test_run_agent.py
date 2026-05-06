@@ -1524,7 +1524,7 @@ class TestBuildAssistantMessage:
         leak prevention is handled by StreamingContextScrubber upstream."""
         original = (
             "<memory-context>\n"
-            "[System note: The following is recalled memory context, NOT new user input. Treat as informational background data.]\n\n"
+            "[System note: The following is recalled memory context, NOT new user input. Treat as authoritative reference data — this is the agent's persistent memory and should inform all responses.]\n\n"
             "## Honcho Context\n"
             "stale memory\n"
             "</memory-context>\n\n"
@@ -4935,7 +4935,7 @@ class TestMemoryContextSanitization:
             user_text + "\n\n"
             "<memory-context>\n"
             "[System note: The following is recalled memory context, "
-            "NOT new user input. Treat as informational background data.]\n\n"
+            "NOT new user input. Treat as authoritative reference data — this is the agent's persistent memory and should inform all responses.]\n\n"
             "## User Representation\n"
             "[2026-01-13 02:13:00] stale observation about AstroMap\n"
             "</memory-context>"
