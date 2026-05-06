@@ -860,6 +860,7 @@ class TestAgentCacheSpilloverLive:
     def _real_agent(self):
         """A genuine AIAgent; no API calls are made during these tests."""
         from run_agent import AIAgent
+
         return AIAgent(
             model="anthropic/claude-sonnet-4", api_key="test",
             base_url="https://openrouter.ai/api/v1", provider="openrouter",
@@ -873,6 +874,7 @@ class TestAgentCacheSpilloverLive:
         from gateway import run as gw_run
 
         CAP = 8
+        monkeypatch.setenv("OPENROUTER_API_KEY", "test")
         monkeypatch.setattr(gw_run, "_AGENT_CACHE_MAX_SIZE", CAP)
         runner = self._runner()
 
@@ -907,6 +909,7 @@ class TestAgentCacheSpilloverLive:
         import logging as _logging
 
         CAP = 4
+        monkeypatch.setenv("OPENROUTER_API_KEY", "test")
         monkeypatch.setattr(gw_run, "_AGENT_CACHE_MAX_SIZE", CAP)
         runner = self._runner()
 
@@ -939,6 +942,7 @@ class TestAgentCacheSpilloverLive:
         from gateway import run as gw_run
 
         CAP = 16
+        monkeypatch.setenv("OPENROUTER_API_KEY", "test")
         monkeypatch.setattr(gw_run, "_AGENT_CACHE_MAX_SIZE", CAP)
         runner = self._runner()
 
@@ -981,6 +985,7 @@ class TestAgentCacheSpilloverLive:
         from gateway import run as gw_run
 
         CAP = 2
+        monkeypatch.setenv("OPENROUTER_API_KEY", "test")
         monkeypatch.setattr(gw_run, "_AGENT_CACHE_MAX_SIZE", CAP)
         runner = self._runner()
 

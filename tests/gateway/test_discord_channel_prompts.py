@@ -36,12 +36,17 @@ from gateway.session import SessionSource
 
 class _CapturingAgent:
     last_init = None
+    next_result = None
 
     def __init__(self, *args, **kwargs):
         type(self).last_init = dict(kwargs)
         self.tools = []
 
     def run_conversation(self, user_message, conversation_history=None, task_id=None, persist_user_message=None):
+        if type(self).next_result is not None:
+            result = type(self).next_result
+            type(self).next_result = None
+            return result
         return {
             "final_response": "ok",
             "messages": [],
@@ -256,3 +261,51 @@ async def test_run_agent_appends_channel_prompt_to_ephemeral_system_prompt(monke
     assert _CapturingAgent.last_init["ephemeral_system_prompt"] == (
         "Context prompt\n\nChannel prompt\n\nGlobal prompt"
     )
+
+
+@pytest.mark.asyncio
+async def test_run_agent_preserves_pdir_changed_to_from_agent_result(monkeypatch, tmp_path):
+    _install_fake_agent(monkeypatch)
+    runner = _make_runner()
+
+    (tmp_path / "config.yaml").write_text("agent:\n  system_prompt: Global prompt\n", encoding="utf-8")
+    monkeypatch.setattr(gateway_run, "_hermes_home", tmp_path)
+    monkeypatch.setattr(gateway_run, "_env_path", tmp_path / ".env")
+    monkeypatch.setattr(gateway_run, "load_dotenv", lambda *args, **kwargs: None)
+    monkeypatch.setattr(gateway_run, "_load_gateway_config", lambda: {})
+    monkeypatch.setattr(gateway_run, "_resolve_gateway_model", lambda config=None: "gpt-5.4")
+    monkeypatch.setattr(
+        gateway_run,
+        "_resolve_runtime_agent_kwargs",
+        lambda: {
+            "provider": "openrouter",
+            "api_mode": "chat_completions",
+            "base_url": "https://openrouter.ai/api/v1",
+            "api_key": "***",
+        },
+    )
+
+    import hermes_cli.tools_config as tools_config
+
+    monkeypatch.setattr(tools_config, "_get_platform_tools", lambda user_config, platform_key: {"core"})
+    target = str(tmp_path / "project")
+    _CapturingAgent.next_result = {
+        "final_response": "Project directory changed",
+        "messages": [],
+        "api_calls": 0,
+        "completed": True,
+        "cwd_changed_to": target,
+        "pdir_changed_to": target,
+    }
+
+    result = await runner._run_agent(
+        message=f"pdir ->> {target}",
+        context_prompt="Context prompt",
+        history=[],
+        source=_make_source(),
+        session_id="session-1",
+        session_key="agent:main:discord:thread:12345",
+    )
+
+    assert result["cwd_changed_to"] == target
+    assert result["pdir_changed_to"] == target

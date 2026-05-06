@@ -36,33 +36,35 @@ needs to replace the import + call site:
     platform = get_session_env("HERMES_SESSION_PLATFORM", "")
 """
 
-from contextvars import ContextVar
-from typing import Any
+from contextvars import ContextVar, Token
 
 # Sentinel to distinguish "never set in this context" from "explicitly set to empty".
 # When a contextvar holds _UNSET, we fall back to os.environ (CLI/cron compat).
 # When it holds "" (after clear_session_vars resets it), we return "" — no fallback.
-_UNSET: Any = object()
+_UNSET: object = object()
 
 # ---------------------------------------------------------------------------
 # Per-task session variables
 # ---------------------------------------------------------------------------
 
-_SESSION_PLATFORM: ContextVar = ContextVar("HERMES_SESSION_PLATFORM", default=_UNSET)
-_SESSION_CHAT_ID: ContextVar = ContextVar("HERMES_SESSION_CHAT_ID", default=_UNSET)
-_SESSION_CHAT_NAME: ContextVar = ContextVar("HERMES_SESSION_CHAT_NAME", default=_UNSET)
-_SESSION_THREAD_ID: ContextVar = ContextVar("HERMES_SESSION_THREAD_ID", default=_UNSET)
-_SESSION_USER_ID: ContextVar = ContextVar("HERMES_SESSION_USER_ID", default=_UNSET)
-_SESSION_USER_NAME: ContextVar = ContextVar("HERMES_SESSION_USER_NAME", default=_UNSET)
-_SESSION_KEY: ContextVar = ContextVar("HERMES_SESSION_KEY", default=_UNSET)
+_SESSION_PLATFORM: ContextVar[object] = ContextVar("HERMES_SESSION_PLATFORM", default=_UNSET)
+_SESSION_CHAT_ID: ContextVar[object] = ContextVar("HERMES_SESSION_CHAT_ID", default=_UNSET)
+_SESSION_CHAT_NAME: ContextVar[object] = ContextVar("HERMES_SESSION_CHAT_NAME", default=_UNSET)
+_SESSION_THREAD_ID: ContextVar[object] = ContextVar("HERMES_SESSION_THREAD_ID", default=_UNSET)
+_SESSION_USER_ID: ContextVar[object] = ContextVar("HERMES_SESSION_USER_ID", default=_UNSET)
+_SESSION_USER_NAME: ContextVar[object] = ContextVar("HERMES_SESSION_USER_NAME", default=_UNSET)
+_SESSION_KEY: ContextVar[object] = ContextVar("HERMES_SESSION_KEY", default=_UNSET)
+_SESSION_PROJECT_DIR: ContextVar[object] = ContextVar("HERMES_SESSION_PROJECT_DIR", default=_UNSET)
+_SESSION_WORKING_DIR: ContextVar[object] = ContextVar("HERMES_SESSION_WORKING_DIR", default=_UNSET)
+_EFFECTIVE_CWD: ContextVar[object] = ContextVar("HERMES_EFFECTIVE_CWD", default=_UNSET)
 
 # Cron auto-delivery vars — set per-job in run_job() so concurrent jobs
 # don't clobber each other's delivery targets.
-_CRON_AUTO_DELIVER_PLATFORM: ContextVar = ContextVar("HERMES_CRON_AUTO_DELIVER_PLATFORM", default=_UNSET)
-_CRON_AUTO_DELIVER_CHAT_ID: ContextVar = ContextVar("HERMES_CRON_AUTO_DELIVER_CHAT_ID", default=_UNSET)
-_CRON_AUTO_DELIVER_THREAD_ID: ContextVar = ContextVar("HERMES_CRON_AUTO_DELIVER_THREAD_ID", default=_UNSET)
+_CRON_AUTO_DELIVER_PLATFORM: ContextVar[object] = ContextVar("HERMES_CRON_AUTO_DELIVER_PLATFORM", default=_UNSET)
+_CRON_AUTO_DELIVER_CHAT_ID: ContextVar[object] = ContextVar("HERMES_CRON_AUTO_DELIVER_CHAT_ID", default=_UNSET)
+_CRON_AUTO_DELIVER_THREAD_ID: ContextVar[object] = ContextVar("HERMES_CRON_AUTO_DELIVER_THREAD_ID", default=_UNSET)
 
-_VAR_MAP = {
+_VAR_MAP: dict[str, ContextVar[object]] = {
     "HERMES_SESSION_PLATFORM": _SESSION_PLATFORM,
     "HERMES_SESSION_CHAT_ID": _SESSION_CHAT_ID,
     "HERMES_SESSION_CHAT_NAME": _SESSION_CHAT_NAME,
@@ -70,6 +72,9 @@ _VAR_MAP = {
     "HERMES_SESSION_USER_ID": _SESSION_USER_ID,
     "HERMES_SESSION_USER_NAME": _SESSION_USER_NAME,
     "HERMES_SESSION_KEY": _SESSION_KEY,
+    "HERMES_SESSION_PROJECT_DIR": _SESSION_PROJECT_DIR,
+    "HERMES_SESSION_WORKING_DIR": _SESSION_WORKING_DIR,
+    "HERMES_EFFECTIVE_CWD": _EFFECTIVE_CWD,
     "HERMES_CRON_AUTO_DELIVER_PLATFORM": _CRON_AUTO_DELIVER_PLATFORM,
     "HERMES_CRON_AUTO_DELIVER_CHAT_ID": _CRON_AUTO_DELIVER_CHAT_ID,
     "HERMES_CRON_AUTO_DELIVER_THREAD_ID": _CRON_AUTO_DELIVER_THREAD_ID,
@@ -84,7 +89,10 @@ def set_session_vars(
     user_id: str = "",
     user_name: str = "",
     session_key: str = "",
-) -> list:
+    project_dir: str = "",
+    working_dir: str = "",
+    effective_cwd: str = "",
+) -> list[Token[object]]:
     """Set all session context variables and return reset tokens.
 
     Call ``clear_session_vars(tokens)`` in a ``finally`` block to restore
@@ -101,11 +109,14 @@ def set_session_vars(
         _SESSION_USER_ID.set(user_id),
         _SESSION_USER_NAME.set(user_name),
         _SESSION_KEY.set(session_key),
+        _SESSION_PROJECT_DIR.set(project_dir),
+        _SESSION_WORKING_DIR.set(working_dir),
+        _EFFECTIVE_CWD.set(effective_cwd),
     ]
     return tokens
 
 
-def clear_session_vars(tokens: list) -> None:
+def clear_session_vars(tokens: list[Token[object]]) -> None:
     """Mark session context variables as explicitly cleared.
 
     Sets all variables to ``""`` so that ``get_session_env`` returns an empty
@@ -116,6 +127,7 @@ def clear_session_vars(tokens: list) -> None:
     to ensure the "explicitly cleared" state is distinguishable from
     "never set" (which holds the ``_UNSET`` sentinel).
     """
+    _ = tokens
     for var in (
         _SESSION_PLATFORM,
         _SESSION_CHAT_ID,
@@ -124,8 +136,11 @@ def clear_session_vars(tokens: list) -> None:
         _SESSION_USER_ID,
         _SESSION_USER_NAME,
         _SESSION_KEY,
+        _SESSION_PROJECT_DIR,
+        _SESSION_WORKING_DIR,
+        _EFFECTIVE_CWD,
     ):
-        var.set("")
+        _ = var.set("")
 
 
 def get_session_env(name: str, default: str = "") -> str:
@@ -149,6 +164,42 @@ def get_session_env(name: str, default: str = "") -> str:
     if var is not None:
         value = var.get()
         if value is not _UNSET:
-            return value
+            return str(value)
     # Fall back to os.environ for CLI, cron, and test compatibility
     return os.getenv(name, default)
+
+
+def _existing_dir(path: str) -> str:
+    """Return *path* if it names an existing directory, otherwise ``""``."""
+    if not path:
+        return ""
+    import os
+
+    expanded = os.path.abspath(os.path.expanduser(path))
+    return expanded if os.path.isdir(expanded) else ""
+
+
+def get_effective_cwd(default: str = "") -> str:
+    """Return the session-local cwd with global fallback.
+
+    Resolver precedence for default execution directories is:
+    session ``working_dir`` > session ``project_dir`` > ``TERMINAL_CWD`` >
+    *default*.  Explicit tool ``workdir`` arguments remain one-call overrides
+    above this helper and must be applied by the caller.
+    """
+    effective = _existing_dir(get_session_env("HERMES_EFFECTIVE_CWD", ""))
+    if effective:
+        return effective
+    working_dir = _existing_dir(get_session_env("HERMES_SESSION_WORKING_DIR", ""))
+    if working_dir:
+        return working_dir
+    project_dir = _existing_dir(get_session_env("HERMES_SESSION_PROJECT_DIR", ""))
+    if project_dir:
+        return project_dir
+
+    import os
+
+    terminal_cwd = _existing_dir(os.getenv("TERMINAL_CWD", ""))
+    if terminal_cwd:
+        return terminal_cwd
+    return default

@@ -67,7 +67,7 @@ _PLATFORM_CONNECT_TIMEOUT_SECS_DEFAULT = 30.0
 # is still classified fresh.  Override via
 # ``config.yaml`` ``agent.gateway_auto_continue_freshness``.
 _AUTO_CONTINUE_FRESHNESS_SECS_DEFAULT = 60 * 60
-_CWD_DIRECTIVE_ONLY_RE = re.compile(r"^\s*cwd\s*->>\s*(\S+)\s*$", re.IGNORECASE)
+_CWD_DIRECTIVE_ONLY_RE = re.compile(r"^\s*(?:cwd|pdir)\s*->>\s*(.*?)\s*$", re.IGNORECASE)
 _CWD_QUERY_PATTERNS = (
     re.compile(r"^\s*where\s+cwd\s*$", re.IGNORECASE),
 )
@@ -550,6 +550,7 @@ from gateway.session import (
     SessionStore,
     SessionSource,
     SessionContext,
+    SessionEntry,
     build_session_context,
     build_session_context_prompt,
     build_session_key,
@@ -5557,7 +5558,8 @@ class GatewayRunner:
                 from agent.context_references import preprocess_context_references_async
                 from agent.model_metadata import get_model_context_length
 
-                _msg_cwd = os.environ.get("TERMINAL_CWD", os.path.expanduser("~"))
+                from gateway.session_context import get_effective_cwd
+                _msg_cwd = get_effective_cwd(os.path.expanduser("~"))
                 _msg_runtime = _resolve_runtime_agent_kwargs()
                 _msg_config_ctx = None
                 try:
@@ -6265,7 +6267,13 @@ class GatewayRunner:
 
             _cwd_changed_to = str(agent_result.get("cwd_changed_to") or "").strip()
             if _cwd_changed_to:
-                _persist_terminal_cwd_default(_cwd_changed_to)
+                session_entry, _session_env_tokens = self._apply_cwd_change_result(
+                    session_entry=session_entry,
+                    session_key=session_key,
+                    agent_result=agent_result,
+                    context=context,
+                    session_env_tokens=_session_env_tokens,
+                )
 
             # If the agent's session_id changed during compression, update
             # session_entry so transcript writes below go to the right session.
@@ -6318,7 +6326,7 @@ class GatewayRunner:
                     model=agent_result.get("model"),
                     context_tokens=agent_result.get("last_prompt_tokens", 0) or 0,
                     context_length=agent_result.get("context_length") or None,
-                    cwd=os.environ.get("TERMINAL_CWD", ""),
+                    cwd=context.working_dir or context.project_dir or os.environ.get("TERMINAL_CWD", ""),
                 )
             except Exception as _footer_err:
                 logger.debug("runtime_footer build failed: %s", _footer_err)
@@ -8479,7 +8487,23 @@ class GatewayRunner:
             max_snapshots=cp_cfg.get("max_snapshots", 50),
         )
 
-        cwd = os.getenv("TERMINAL_CWD", str(Path.home()))
+        from gateway.session_context import get_effective_cwd
+
+        cwd = ""
+        try:
+            session_store = getattr(self, "session_store", None)
+            if session_store is not None:
+                entry = session_store.get_or_create_session(event.source)
+                for candidate in (entry.working_dir, entry.project_dir):
+                    if candidate:
+                        resolved = os.path.abspath(os.path.expanduser(str(candidate)))
+                        if os.path.isdir(resolved):
+                            cwd = resolved
+                            break
+        except Exception:
+            cwd = ""
+        if not cwd:
+            cwd = get_effective_cwd(str(Path.home()))
         arg = event.get_command_args().strip()
 
         if not arg:
@@ -8555,7 +8579,21 @@ class GatewayRunner:
             _thread_metadata = dict(_thread_metadata or {})
             _thread_metadata["mention_user_id"] = str(fallback_mention_user)
 
+        _session_env_tokens = []
+        _background_session_key = ""
         try:
+            try:
+                session_entry = self.session_store.get_or_create_session(source)
+                _background_session_key = getattr(session_entry, "session_key", "") or ""
+                context = build_session_context(source, self.config, session_entry)
+                _session_env_tokens = self._set_session_env(context)
+            except Exception as _ctx_err:
+                logger.debug(
+                    "Background task %s could not seed session workspace context: %s",
+                    task_id,
+                    _ctx_err,
+                )
+
             user_config = _load_gateway_config()
             model, runtime_kwargs = self._resolve_session_agent_runtime(
                 source=source,
@@ -8609,6 +8647,7 @@ class GatewayRunner:
                     chat_name=source.chat_name,
                     chat_type=source.chat_type,
                     thread_id=source.thread_id,
+                    gateway_session_key=_background_session_key,
                     session_db=self._session_db,
                     fallback_model=self._fallback_model,
                 )
@@ -8687,6 +8726,9 @@ class GatewayRunner:
                 )
             except Exception:
                 pass
+        finally:
+            if _session_env_tokens:
+                self._clear_session_env(_session_env_tokens)
 
     async def _handle_reasoning_command(self, event: MessageEvent) -> str:
         """Handle /reasoning command — manage reasoning effort and display toggle.
@@ -10514,6 +10556,23 @@ class GatewayRunner:
         in a ``finally`` block.
         """
         from gateway.session_context import set_session_vars
+
+        def _valid_dir(value: str | None) -> str:
+            if not value:
+                return ""
+            try:
+                candidate = os.path.abspath(os.path.expanduser(str(value)))
+                return candidate if os.path.isdir(candidate) else ""
+            except Exception:
+                return ""
+
+        project_dir = str(context.project_dir or "")
+        working_dir = str(context.working_dir or "")
+        # Store only session-local cwd in the task context.  The global
+        # terminal.cwd / TERMINAL_CWD fallback is intentionally read live by
+        # get_effective_cwd() after the gateway's per-turn config reapply, so a
+        # fallback-only session cannot freeze a stale process env value here.
+        effective_cwd = _valid_dir(working_dir) or _valid_dir(project_dir)
         return set_session_vars(
             platform=context.source.platform.value,
             chat_id=context.source.chat_id,
@@ -10522,12 +10581,45 @@ class GatewayRunner:
             user_id=str(context.source.user_id) if context.source.user_id else "",
             user_name=str(context.source.user_name) if context.source.user_name else "",
             session_key=context.session_key,
+            project_dir=project_dir,
+            working_dir=working_dir,
+            effective_cwd=effective_cwd,
         )
 
     def _clear_session_env(self, tokens: list) -> None:
         """Restore session context variables to their pre-handler values."""
         from gateway.session_context import clear_session_vars
         clear_session_vars(tokens)
+
+    def _apply_cwd_change_result(
+        self,
+        *,
+        session_entry: SessionEntry,
+        session_key: str,
+        agent_result: dict,
+        context: SessionContext,
+        session_env_tokens: list,
+    ) -> tuple[SessionEntry, list]:
+        """Apply cwd/pdir directive results without mutating global gateway cwd."""
+        cwd_changed_to = str(agent_result.get("cwd_changed_to") or "").strip()
+        if not cwd_changed_to:
+            return session_entry, session_env_tokens
+        pdir_changed_to = str(agent_result.get("pdir_changed_to") or "").strip()
+        if getattr(session_entry, "session_key", None):
+            updated = self.session_store.update_workspace(
+                session_key,
+                project_dir=pdir_changed_to or None,
+                working_dir=cwd_changed_to,
+            )
+            if updated is not None:
+                session_entry = updated
+                context.project_dir = session_entry.project_dir
+                context.working_dir = session_entry.working_dir
+                self._clear_session_env(session_env_tokens)
+                session_env_tokens = self._set_session_env(context)
+            return session_entry, session_env_tokens
+        _persist_terminal_cwd_default(cwd_changed_to)
+        return session_entry, session_env_tokens
 
     async def _run_in_executor_with_context(self, func, *args):
         """Run blocking work in the thread pool while preserving session contextvars."""
@@ -12009,7 +12101,7 @@ class GatewayRunner:
             _progress_thread_id = source.thread_id or event_message_id
         else:
             _progress_thread_id = source.thread_id
-            _progress_metadata = _gateway_outbound_metadata(source, _progress_thread_id, mention_user=False)
+        _progress_metadata = _gateway_outbound_metadata(source, _progress_thread_id, mention_user=False)
 
         async def send_progress_messages():
             if not progress_queue:
@@ -12866,6 +12958,7 @@ class GatewayRunner:
                     "model": _resolved_model,
                     "context_length": _context_length,
                     "cwd_changed_to": result.get("cwd_changed_to"),
+                    "pdir_changed_to": result.get("pdir_changed_to"),
                 }
             
             # Scan tool results for MEDIA:<path> tags that need to be delivered
@@ -12974,6 +13067,7 @@ class GatewayRunner:
                 "session_id": effective_session_id,
                 "response_previewed": result.get("response_previewed", False),
                 "cwd_changed_to": result.get("cwd_changed_to"),
+                "pdir_changed_to": result.get("pdir_changed_to"),
             }
         
         # Start progress message sender if enabled

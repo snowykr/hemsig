@@ -74,7 +74,8 @@ from agent.workflows import (
 
 
 _OPENAI_CLS_CACHE: Optional[type] = None
-_CWD_DIRECTIVE_RE = re.compile(r"^\s*cwd\s*->>\s*(\S+)\s*$", re.IGNORECASE)
+_DIR_DIRECTIVE_RE = re.compile(r"^\s*(cwd|pdir)\s*->>\s*(.*?)\s*$", re.IGNORECASE)
+_CWD_DIRECTIVE_RE = re.compile(r"^\s*cwd\s*->>\s*(.*?)\s*$", re.IGNORECASE)
 _CWD_QUERY_PATTERNS = (
     re.compile(r"^\s*where\s+cwd\s*$", re.IGNORECASE),
 )
@@ -2068,7 +2069,12 @@ class AIAgent:
                 logger.debug("Context engine on_session_start: %s", _ce_err)
 
         self._subdirectory_hints = SubdirectoryHintTracker(
-            working_dir=os.getenv("TERMINAL_CWD") or None,
+            working_dir=(
+                __import__("gateway.session_context", fromlist=["get_effective_cwd"])
+                .get_effective_cwd("")
+                or os.getenv("TERMINAL_CWD")
+                or None
+            ),
         )
         self._user_turn_count = 0
 
@@ -2250,18 +2256,27 @@ class AIAgent:
         self.workflow_context = dict(data)
         self._ensure_workflow_state_loaded(save_if_new=bool(getattr(self, "session_id", "")))
 
-    def _resolve_cwd_directive_path(self, text: Any) -> Optional[str]:
-        """Resolve ``cwd ->> <path>`` directives to an existing directory."""
+    def _resolve_directory_directive_path(self, text: Any, directive: str) -> Optional[str]:
+        """Resolve directory directives to an existing directory."""
 
         if not isinstance(text, str):
             return None
-        match = _CWD_DIRECTIVE_RE.fullmatch(text)
+        match = _DIR_DIRECTIVE_RE.fullmatch(text)
         if not match:
             return None
-        raw_path = match.group(1).strip()
+        if match.group(1).lower() != directive.lower():
+            return None
+        raw_path = match.group(2).strip()
         if not raw_path:
             return None
-        base_dir = Path(os.getenv("TERMINAL_CWD", os.getcwd())).expanduser()
+        if getattr(self, "_gateway_session_key", None):
+            try:
+                from gateway.session_context import get_effective_cwd
+                base_dir = Path(get_effective_cwd(os.getcwd())).expanduser()
+            except Exception:
+                base_dir = Path(os.getenv("TERMINAL_CWD", os.getcwd())).expanduser()
+        else:
+            base_dir = Path(os.getenv("TERMINAL_CWD", os.getcwd())).expanduser()
         candidate = Path(raw_path).expanduser()
         if not candidate.is_absolute():
             candidate = base_dir / candidate
@@ -2273,6 +2288,31 @@ class AIAgent:
             return None
         return str(resolved)
 
+    def _directory_directive_parts(self, text: Any) -> Optional[tuple[str, str]]:
+        """Return (directive, raw_path) for directive-shaped cwd/pdir text."""
+
+        if not isinstance(text, str):
+            return None
+        match = _DIR_DIRECTIVE_RE.fullmatch(text)
+        if not match:
+            return None
+        return match.group(1).lower(), match.group(2).strip()
+
+    def _directory_directive_failure_response(self, raw_path: str) -> str:
+        if not raw_path:
+            return "Directory directive requires a path."
+        return f"Directory does not exist or is not a directory: {raw_path}"
+
+    def _resolve_cwd_directive_path(self, text: Any) -> Optional[str]:
+        """Resolve ``cwd ->> <path>`` directives to an existing directory."""
+
+        return self._resolve_directory_directive_path(text, "cwd")
+
+    def _resolve_pdir_directive_path(self, text: Any) -> Optional[str]:
+        """Resolve ``pdir ->> <path>`` directives to an existing directory."""
+
+        return self._resolve_directory_directive_path(text, "pdir")
+
     def _is_cwd_query_text(self, text: Any) -> bool:
         if not isinstance(text, str):
             return False
@@ -2280,7 +2320,11 @@ class AIAgent:
 
     def _current_effective_cwd(self, conversation_history: Optional[List[Dict[str, Any]]]) -> str:
         if self._gateway_session_key:
-            return os.getenv("TERMINAL_CWD", os.getcwd())
+            try:
+                from gateway.session_context import get_effective_cwd
+                return get_effective_cwd(os.getcwd())
+            except Exception:
+                return os.getenv("TERMINAL_CWD", os.getcwd())
         restored = self._apply_session_cwd_from_messages(None, conversation_history)
         if restored:
             return restored
@@ -2311,7 +2355,7 @@ class AIAgent:
     ) -> Optional[str]:
         """Apply the effective session cwd derived from directive messages."""
 
-        if getattr(self, "_gateway_session_key", None) and self._resolve_cwd_directive_path(user_message) is None:
+        if getattr(self, "_gateway_session_key", None):
             return None
         resolved = self._session_cwd_from_history(user_message, conversation_history)
         if not resolved:
@@ -2341,8 +2385,23 @@ class AIAgent:
 
         resolved = self._resolve_cwd_directive_path(user_message)
         if not resolved:
-            return None
-        self._apply_session_cwd_from_messages(user_message, conversation_history)
+            parts = self._directory_directive_parts(user_message)
+            if not parts or parts[0] != "cwd":
+                return None
+            final_response = self._directory_directive_failure_response(parts[1])
+            messages.append({"role": "assistant", "content": final_response})
+            self._persist_session(messages, conversation_history or [])
+            return {
+                "final_response": final_response,
+                "messages": messages,
+                "api_calls": 0,
+                "completed": True,
+                "model": self.model,
+            }
+        if getattr(self, "_gateway_session_key", None):
+            self._subdirectory_hints = SubdirectoryHintTracker(working_dir=resolved)
+        else:
+            self._apply_session_cwd_from_messages(user_message, conversation_history)
         final_response = f"Working directory changed to {resolved}"
         messages.append({"role": "assistant", "content": final_response})
         self._persist_session(messages, conversation_history or [])
@@ -2352,6 +2411,54 @@ class AIAgent:
             "api_calls": 0,
             "completed": True,
             "model": self.model,
+            "cwd_changed_to": resolved,
+        }
+
+    def _handle_pdir_directive_turn(
+        self,
+        user_message: Any,
+        messages: List[Dict[str, Any]],
+        conversation_history: Optional[List[Dict[str, Any]]],
+    ) -> Optional[Dict[str, Any]]:
+        """Apply and acknowledge a valid gateway ``pdir ->>`` directive turn."""
+
+        parts = self._directory_directive_parts(user_message)
+        if not parts or parts[0] != "pdir":
+            return None
+        if not getattr(self, "_gateway_session_key", None):
+            final_response = "Project directory directives are only supported in gateway sessions."
+            messages.append({"role": "assistant", "content": final_response})
+            self._persist_session(messages, conversation_history or [])
+            return {
+                "final_response": final_response,
+                "messages": messages,
+                "api_calls": 0,
+                "completed": True,
+                "model": self.model,
+            }
+        resolved = self._resolve_pdir_directive_path(user_message)
+        if not resolved:
+            final_response = self._directory_directive_failure_response(parts[1])
+            messages.append({"role": "assistant", "content": final_response})
+            self._persist_session(messages, conversation_history or [])
+            return {
+                "final_response": final_response,
+                "messages": messages,
+                "api_calls": 0,
+                "completed": True,
+                "model": self.model,
+            }
+        self._subdirectory_hints = SubdirectoryHintTracker(working_dir=resolved)
+        final_response = f"Project directory changed to {resolved}"
+        messages.append({"role": "assistant", "content": final_response})
+        self._persist_session(messages, conversation_history or [])
+        return {
+            "final_response": final_response,
+            "messages": messages,
+            "api_calls": 0,
+            "completed": True,
+            "model": self.model,
+            "pdir_changed_to": resolved,
             "cwd_changed_to": resolved,
         }
 
@@ -5697,7 +5804,11 @@ class AIAgent:
             # mode).  The gateway process runs from the hermes-agent install
             # dir, so os.getcwd() would pick up the repo's AGENTS.md and
             # other dev files — inflating token usage by ~10k for no benefit.
-            _context_cwd = os.getenv("TERMINAL_CWD") or None
+            try:
+                from gateway.session_context import get_effective_cwd
+                _context_cwd = get_effective_cwd("") or None
+            except Exception:
+                _context_cwd = os.getenv("TERMINAL_CWD") or None
             context_files_prompt = build_context_files_prompt(
                 cwd=_context_cwd, skip_soul=_soul_loaded)
             if context_files_prompt:
@@ -10169,7 +10280,14 @@ class AIAgent:
                 try:
                     cmd = function_args.get("command", "")
                     if _is_destructive_command(cmd):
-                        cwd = function_args.get("workdir") or os.getenv("TERMINAL_CWD", os.getcwd())
+                        if function_args.get("workdir"):
+                            cwd = function_args["workdir"]
+                        else:
+                            try:
+                                from gateway.session_context import get_effective_cwd
+                                cwd = get_effective_cwd(os.getcwd())
+                            except Exception:
+                                cwd = os.getenv("TERMINAL_CWD", os.getcwd())
                         self._checkpoint_mgr.ensure_checkpoint(
                             cwd, f"before terminal: {cmd[:60]}"
                         )
@@ -10649,7 +10767,14 @@ class AIAgent:
                 try:
                     cmd = function_args.get("command", "")
                     if _is_destructive_command(cmd):
-                        cwd = function_args.get("workdir") or os.getenv("TERMINAL_CWD", os.getcwd())
+                        if function_args.get("workdir"):
+                            cwd = function_args["workdir"]
+                        else:
+                            try:
+                                from gateway.session_context import get_effective_cwd
+                                cwd = get_effective_cwd(os.getcwd())
+                            except Exception:
+                                cwd = os.getenv("TERMINAL_CWD", os.getcwd())
                         self._checkpoint_mgr.ensure_checkpoint(
                             cwd, f"before terminal: {cmd[:60]}"
                         )
@@ -11311,6 +11436,14 @@ class AIAgent:
         messages.append(user_msg)
         current_turn_user_idx = len(messages) - 1
         self._persist_user_message_idx = current_turn_user_idx
+
+        pdir_directive_result = self._handle_pdir_directive_turn(
+            user_message,
+            messages,
+            conversation_history,
+        )
+        if pdir_directive_result is not None:
+            return pdir_directive_result
 
         cwd_directive_result = self._handle_cwd_directive_turn(
             user_message,
