@@ -582,6 +582,18 @@ def _start_agent_build(sid: str, session: dict) -> None:
             if cfg_warn:
                 info["config_warning"] = cfg_warn
                 logger.warning(cfg_warn)
+
+            pending_title = current.get("pending_title")
+            if pending_title:
+                try:
+                    db = _get_db()
+                    if db and db.set_session_title(key, pending_title):
+                        current["pending_title"] = None
+                except ValueError:
+                    current["pending_title"] = None
+                except Exception:
+                    pass
+
             _emit("session.info", sid, info)
         except Exception as e:
             current["agent_error"] = str(e)
@@ -2989,6 +3001,8 @@ def _run_prompt_submit(rid, sid: str, session: dict, text: Any) -> None:
                     try:
                         if _pdb.set_session_title(session.get("session_key") or sid, _pending):
                             session["pending_title"] = None
+                    except ValueError:
+                        session["pending_title"] = None
                     except Exception:
                         pass  # Best effort — auto-title will handle it below
 
