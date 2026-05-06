@@ -88,8 +88,8 @@ def _resolve_path(filepath: str, task_id: str = "default") -> Path:
 def _get_live_tracking_cwd(task_id: str = "default") -> str | None:
     """Return the task's live terminal cwd for bookkeeping when available."""
     try:
-        from tools.terminal_tool import _resolve_container_task_id
-        container_key = _resolve_container_task_id(task_id)
+        from tools.terminal_tool import _resolve_environment_cache_key
+        container_key = _resolve_environment_cache_key(task_id)
     except Exception:
         container_key = task_id
 
@@ -120,9 +120,31 @@ def _resolve_path_for_task(filepath: str, task_id: str = "default") -> Path:
     """Resolve *filepath* against the task's live terminal cwd when possible."""
     p = Path(filepath).expanduser()
     if not p.is_absolute():
-        base = _get_live_tracking_cwd(task_id) or os.environ.get(
-            "TERMINAL_CWD", os.getcwd()
-        )
+        session_cwd = ""
+        has_session_workspace = False
+        try:
+            from gateway.session_context import get_effective_cwd, get_session_env
+            has_session_workspace = bool(
+                get_session_env("HERMES_SESSION_WORKING_DIR", "")
+                or get_session_env("HERMES_SESSION_PROJECT_DIR", "")
+                or get_session_env("HERMES_EFFECTIVE_CWD", "")
+            )
+            session_cwd = get_effective_cwd(os.getcwd())
+        except Exception:
+            session_cwd = os.environ.get("TERMINAL_CWD", os.getcwd())
+        mapped_session_cwd = ""
+        if has_session_workspace:
+            try:
+                from tools.terminal_tool import _get_env_config
+                env_config = _get_env_config()
+                if env_config.get("host_cwd") and Path(env_config["host_cwd"]).resolve() == Path(session_cwd).resolve():
+                    mapped_session_cwd = str(env_config.get("cwd") or "")
+            except Exception:
+                mapped_session_cwd = ""
+        # In gateway sessions, persisted workspace state is authoritative over
+        # a reused terminal env's stale cwd.  Without session workspace state,
+        # preserve the existing live-terminal tracking behavior.
+        base = (mapped_session_cwd or session_cwd) if has_session_workspace else (_get_live_tracking_cwd(task_id) or session_cwd)
         p = Path(base) / p
     return p.resolve()
 
@@ -322,11 +344,12 @@ def _get_file_ops(task_id: str = "default") -> ShellFileOperations:
         _get_env_config, _last_activity, _start_cleanup_thread,
         _creation_locks,
         _creation_locks_lock,
-        _resolve_container_task_id,
+        _resolve_environment_cache_key,
     )
     import time
 
-    task_id = _resolve_container_task_id(task_id)
+    config = _get_env_config()
+    task_id = _resolve_environment_cache_key(task_id, config)
 
     # Fast path: check cache -- but also verify the underlying environment
     # is still alive (it may have been killed by the cleanup thread).
@@ -361,7 +384,6 @@ def _get_file_ops(task_id: str = "default") -> ShellFileOperations:
         if terminal_env is None:
             from tools.terminal_tool import _task_env_overrides
 
-            config = _get_env_config()
             env_type = config["env_type"]
             overrides = _task_env_overrides.get(task_id, {})
 
@@ -475,7 +497,8 @@ def read_file_tool(path: str, offset: int = 1, limit: int = 500, task_id: str = 
 
         # ── Hermes internal path guard ────────────────────────────────
         # Prevent prompt injection via catalog or hub metadata files.
-        block_error = get_read_block_error(path)
+        resolved_str = str(_resolved)
+        block_error = get_read_block_error(resolved_str)
         if block_error:
             return json.dumps({"error": block_error})
 
@@ -483,7 +506,6 @@ def read_file_tool(path: str, offset: int = 1, limit: int = 500, task_id: str = 
         # If we already read this exact (path, offset, limit) and the
         # file hasn't been modified since, return a lightweight stub
         # instead of re-sending the same content.  Saves context tokens.
-        resolved_str = str(_resolved)
         dedup_key = (resolved_str, offset, limit)
         with _read_tracker_lock:
             task_data = _read_tracker.setdefault(task_id, {
@@ -541,7 +563,7 @@ def read_file_tool(path: str, offset: int = 1, limit: int = 500, task_id: str = 
 
         # ── Perform the read ──────────────────────────────────────────
         file_ops = _get_file_ops(task_id)
-        result = file_ops.read_file(path, offset, limit)
+        result = file_ops.read_file(resolved_str, offset, limit)
         result_dict = result.to_dict()
 
         # ── Character-count guard ─────────────────────────────────────
@@ -828,7 +850,7 @@ def write_file_tool(path: str, content: str, task_id: str = "default") -> str:
             cross_warning = file_state.check_stale(task_id, _resolved)
             stale_warning = _check_file_staleness(path, task_id)
             file_ops = _get_file_ops(task_id)
-            result = file_ops.write_file(path, content)
+            result = file_ops.write_file(_resolved, content)
             result_dict = result.to_dict()
             effective_warning = cross_warning or stale_warning
             if effective_warning:
@@ -859,10 +881,40 @@ def patch_tool(mode: str = "replace", path: str = None, old_string: str = None,
         import re as _re
         for _m in _re.finditer(r'^\*\*\*\s+(?:Update|Add|Delete)\s+File:\s*(.+)$', patch, _re.MULTILINE):
             _paths_to_check.append(_m.group(1).strip())
+        for _m in _re.finditer(r'^\*\*\*\s+Move\s+File:\s*(.+?)\s*->\s*(.+)$', patch, _re.MULTILINE):
+            _paths_to_check.append(_m.group(1).strip())
+            _paths_to_check.append(_m.group(2).strip())
     for _p in _paths_to_check:
         sensitive_err = _check_sensitive_path(_p, task_id)
         if sensitive_err:
             return tool_error(sensitive_err)
+
+    def _resolved_patch_content(patch_text: str, path_map: dict[str, str]) -> str:
+        import re as _re
+
+        def _replace_file_header(match):
+            prefix = match.group(1)
+            original = match.group(2).strip()
+            return f"{prefix}{path_map.get(original, original)}"
+
+        def _replace_move_header(match):
+            src = match.group(1).strip()
+            dst = match.group(2).strip()
+            return f"*** Move File: {path_map.get(src, src)} -> {path_map.get(dst, dst)}"
+
+        patch_text = _re.sub(
+            r'^(\*\*\*\s+(?:Update|Add|Delete)\s+File:\s*)(.+)$',
+            _replace_file_header,
+            patch_text,
+            flags=_re.MULTILINE,
+        )
+        return _re.sub(
+            r'^\*\*\*\s+Move\s+File:\s*(.+?)\s*->\s*(.+)$',
+            _replace_move_header,
+            patch_text,
+            flags=_re.MULTILINE,
+        )
+
     try:
         # Resolve paths for locking.  Ordered + deduplicated so concurrent
         # callers lock in the same order — prevents deadlock on overlapping
@@ -901,6 +953,7 @@ def patch_tool(mode: str = "replace", path: str = None, old_string: str = None,
                 _sw = _cross or _check_file_staleness(_p, task_id)
                 if _sw:
                     stale_warnings.append(_sw)
+            _resolved_patch = _resolved_patch_content(patch, _path_to_resolved) if patch else patch
 
             file_ops = _get_file_ops(task_id)
 
@@ -909,11 +962,11 @@ def patch_tool(mode: str = "replace", path: str = None, old_string: str = None,
                     return tool_error("path required")
                 if old_string is None or new_string is None:
                     return tool_error("old_string and new_string required")
-                result = file_ops.patch_replace(path, old_string, new_string, replace_all)
+                result = file_ops.patch_replace(_path_to_resolved.get(path, path), old_string, new_string, replace_all)
             elif mode == "patch":
                 if not patch:
                     return tool_error("patch content required")
-                result = file_ops.patch_v4a(patch)
+                result = file_ops.patch_v4a(_resolved_patch)
             else:
                 return tool_error(f"Unknown mode: {mode}")
 

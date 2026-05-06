@@ -105,3 +105,33 @@ def test_get_active_env_honours_rl_override():
         terminal_tool.clear_task_env_overrides("rl-42")
         terminal_tool._active_environments.pop("default", None)
         terminal_tool._active_environments.pop("rl-42", None)
+
+
+def test_env_cache_key_uses_workspace_identity_for_docker_workspace_mounts():
+    config_a = {
+        "env_type": "docker",
+        "docker_mount_cwd_to_workspace": True,
+        "host_cwd": "/tmp/workspace-a",
+    }
+    config_b = {
+        "env_type": "docker",
+        "docker_mount_cwd_to_workspace": True,
+        "host_cwd": "/tmp/workspace-b",
+    }
+
+    key_a = terminal_tool._resolve_environment_cache_key("subagent-1-a", config=config_a)
+    key_b = terminal_tool._resolve_environment_cache_key("subagent-1-b", config=config_b)
+
+    assert key_a != key_b
+    assert key_a.startswith("default::docker-mount::")
+    assert key_b.startswith("default::docker-mount::")
+
+
+def test_env_cache_key_stays_shared_default_without_workspace_mount():
+    config = {
+        "env_type": "docker",
+        "docker_mount_cwd_to_workspace": False,
+        "host_cwd": "/tmp/workspace-a",
+    }
+
+    assert terminal_tool._resolve_environment_cache_key("subagent-1-a", config=config) == "default"

@@ -208,3 +208,22 @@ def test_docker_mount_cwd_to_workspace_is_bridged_everywhere():
     assert "docker_mount_cwd_to_workspace" in _gateway_env_map_keys()
     assert "docker_mount_cwd_to_workspace" in _save_config_env_sync_keys()
     assert "TERMINAL_DOCKER_MOUNT_CWD_TO_WORKSPACE" in _terminal_tool_env_var_names()
+
+
+def test_terminal_env_config_uses_session_effective_cwd(monkeypatch, tmp_path):
+    from gateway.session_context import clear_session_vars, set_session_vars
+    from tools.terminal_tool import _get_env_config
+
+    terminal_dir = tmp_path / "terminal"
+    session_dir = tmp_path / "session"
+    terminal_dir.mkdir()
+    session_dir.mkdir()
+    monkeypatch.setenv("TERMINAL_ENV", "local")
+    monkeypatch.setenv("TERMINAL_CWD", str(terminal_dir))
+    tokens = set_session_vars(working_dir=str(session_dir))
+    try:
+        config = _get_env_config()
+    finally:
+        clear_session_vars(tokens)
+
+    assert config["cwd"] == str(session_dir)

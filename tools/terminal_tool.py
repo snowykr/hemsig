@@ -34,6 +34,7 @@ Usage:
 """
 
 import importlib.util
+import hashlib
 import json
 import logging
 import os
@@ -985,6 +986,36 @@ def _resolve_container_task_id(task_id: Optional[str]) -> str:
     return "default"
 
 
+def _resolve_environment_cache_key(
+    task_id: Optional[str],
+    config: Optional[Dict[str, Any]] = None,
+) -> str:
+    """Return the cache key for active terminal environments.
+
+    Most callers still collapse to the shared ``"default"`` sandbox via
+    ``_resolve_container_task_id``. The only additional split we introduce is
+    for Docker's optional ``host_cwd -> /workspace`` bind-mount mode, where the
+    mounted host path is part of the real sandbox identity. Without this split,
+    two gateway sessions with different workspaces can incorrectly reuse the
+    same Docker container and stale /workspace bind mount.
+    """
+    container_task_id = _resolve_container_task_id(task_id)
+    if container_task_id != "default":
+        return container_task_id
+
+    cfg = config or _get_env_config()
+    if (
+        cfg.get("env_type") == "docker"
+        and cfg.get("docker_mount_cwd_to_workspace")
+        and cfg.get("host_cwd")
+    ):
+        host_cwd = os.path.abspath(os.path.expanduser(str(cfg["host_cwd"])))
+        digest = hashlib.sha1(host_cwd.encode("utf-8")).hexdigest()[:12]
+        return f"{container_task_id}::docker-mount::{digest}"
+
+    return container_task_id
+
+
 # Configuration from environment variables
 
 def _parse_env_var(name: str, default: str, converter=int, type_label: str = "integer"):
@@ -1027,13 +1058,24 @@ def _get_env_config() -> Dict[str, Any]:
     # If Docker cwd passthrough is explicitly enabled, remap the host path to
     # /workspace and track the original host path separately. Otherwise keep the
     # normal sandbox behavior and discard host paths.
-    cwd = os.getenv("TERMINAL_CWD", default_cwd)
+    has_session_workspace = False
+    try:
+        from gateway.session_context import get_effective_cwd, get_session_env
+        has_session_workspace = bool(
+            get_session_env("HERMES_SESSION_WORKING_DIR", "")
+            or get_session_env("HERMES_SESSION_PROJECT_DIR", "")
+            or get_session_env("HERMES_EFFECTIVE_CWD", "")
+        )
+        cwd = get_effective_cwd(default_cwd) if has_session_workspace else os.getenv("TERMINAL_CWD", default_cwd)
+    except Exception:
+        cwd = os.getenv("TERMINAL_CWD", default_cwd)
     if cwd:
         cwd = os.path.expanduser(cwd)
     host_cwd = None
     host_prefixes = ("/Users/", "/home/", "C:\\", "C:/")
     if env_type == "docker" and mount_docker_cwd:
-        docker_cwd_source = os.getenv("TERMINAL_CWD") or os.getcwd()
+        configured_cwd = None if has_session_workspace else os.getenv("TERMINAL_CWD")
+        docker_cwd_source = configured_cwd or (cwd if cwd and cwd != default_cwd else os.getcwd())
         candidate = os.path.abspath(os.path.expanduser(docker_cwd_source))
         if (
             any(candidate.startswith(p) for p in host_prefixes)
@@ -1348,9 +1390,9 @@ def _stop_cleanup_thread():
 
 def get_active_env(task_id: str):
     """Return the active BaseEnvironment for *task_id*, or None."""
-    lookup = _resolve_container_task_id(task_id)
+    lookup = _resolve_environment_cache_key(task_id)
     with _env_lock:
-        return _active_environments.get(lookup) or _active_environments.get(task_id)
+        return _active_environments.get(lookup)
 
 
 def is_persistent_env(task_id: str) -> bool:
@@ -1687,7 +1729,7 @@ def terminal_tool(
         # task_ids collapse back to "default" so the top-level agent and
         # every delegate_task child share one container; only task_ids with
         # a registered env override (RL benchmarks) get isolated sandboxes.
-        effective_task_id = _resolve_container_task_id(task_id)
+        effective_task_id = _resolve_environment_cache_key(task_id, config)
 
         # Check per-task overrides (set by environments like TerminalBench2Env)
         # before falling back to global env var config
@@ -1999,22 +2041,33 @@ def terminal_tool(
             retry_count = 0
             result = None
             foreground_cwd = workdir or cwd
+            explicit_workdir_previous_cwd = (
+                getattr(env, "cwd", None) if workdir and hasattr(env, "cwd") else None
+            )
 
-            if foreground_cwd and hasattr(env, "cwd") and getattr(env, "cwd", None) != foreground_cwd:
+            if (not workdir) and foreground_cwd and hasattr(env, "cwd") and getattr(env, "cwd", None) != foreground_cwd:
                 try:
                     env.cwd = foreground_cwd
                 except Exception:
                     pass
+
+            def _restore_explicit_workdir_cwd() -> None:
+                if workdir and explicit_workdir_previous_cwd is not None and hasattr(env, "cwd"):
+                    try:
+                        env.cwd = explicit_workdir_previous_cwd
+                    except Exception:
+                        pass
             
             while retry_count <= max_retries:
                 try:
                     execute_kwargs = {"timeout": effective_timeout}
-                    if workdir:
-                        execute_kwargs["cwd"] = workdir
+                    if foreground_cwd:
+                        execute_kwargs["cwd"] = foreground_cwd
                     result = env.execute(command, **execute_kwargs)
                 except Exception as e:
                     error_str = str(e).lower()
                     if "timeout" in error_str:
+                        _restore_explicit_workdir_cwd()
                         return json.dumps({
                             "output": "",
                             "exit_code": 124,
@@ -2032,6 +2085,7 @@ def terminal_tool(
                     
                     logger.error("Execution failed after %d retries - Command: %s - Error: %s: %s - Task: %s, Backend: %s",
                                  max_retries, _safe_command_preview(command), type(e).__name__, e, effective_task_id, env_type)
+                    _restore_explicit_workdir_cwd()
                     return json.dumps({
                         "output": "",
                         "exit_code": -1,
@@ -2040,6 +2094,8 @@ def terminal_tool(
                 
                 # Got a result
                 break
+
+            _restore_explicit_workdir_cwd()
             
             # Extract output
             output = result.get("output", "")

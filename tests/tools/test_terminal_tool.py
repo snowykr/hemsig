@@ -181,8 +181,9 @@ def test_foreground_reused_environment_syncs_cwd_from_terminal_env(monkeypatch):
             self.calls = []
 
         def execute(self, command, **kwargs):
-            self.calls.append((command, kwargs, self.cwd))
-            return {"output": self.cwd, "returncode": 0}
+            execution_cwd = kwargs.get("cwd") or self.cwd
+            self.calls.append((command, kwargs, execution_cwd, self.cwd))
+            return {"output": execution_cwd, "returncode": 0}
 
     dummy_env = DummyEnv()
 
@@ -222,4 +223,191 @@ def test_foreground_reused_environment_syncs_cwd_from_terminal_env(monkeypatch):
 
     assert result["output"] == "/home/snowy/coding"
     assert dummy_env.cwd == "/home/snowy/coding"
+    assert dummy_env.calls[0][1]["cwd"] == "/home/snowy/coding"
     assert dummy_env.calls[0][2] == "/home/snowy/coding"
+
+
+def test_foreground_reused_environment_syncs_cwd_from_session_effective_cwd(monkeypatch, tmp_path):
+    from gateway.session_context import clear_session_vars, set_session_vars
+
+    stale = tmp_path / "stale"
+    session_workspace = tmp_path / "session-workspace"
+    stale.mkdir()
+    session_workspace.mkdir()
+    monkeypatch.setenv("TERMINAL_ENV", "local")
+    monkeypatch.setenv("TERMINAL_CWD", str(stale))
+
+    class DummyEnv:
+        def __init__(self):
+            self.cwd = str(stale)
+            self.calls = []
+            self.env = {}
+
+        def execute(self, command, **kwargs):
+            execution_cwd = kwargs.get("cwd") or self.cwd
+            self.calls.append((command, kwargs, execution_cwd, self.cwd))
+            return {"output": execution_cwd, "returncode": 0}
+
+    dummy_env = DummyEnv()
+    monkeypatch.setattr(terminal_tool, "_start_cleanup_thread", lambda: None)
+    monkeypatch.setattr(terminal_tool, "_check_all_guards", lambda *_args, **_kwargs: {"approved": True})
+    monkeypatch.setattr(terminal_tool, "_active_environments", {"default": dummy_env})
+    monkeypatch.setattr(terminal_tool, "_last_activity", {"default": 0})
+    tokens = set_session_vars(working_dir=str(session_workspace))
+
+    try:
+        result = json.loads(terminal_tool.terminal_tool(command="pwd"))
+    finally:
+        clear_session_vars(tokens)
+
+    assert result["output"] == str(session_workspace)
+    assert dummy_env.cwd == str(session_workspace)
+    assert dummy_env.calls[0][1]["cwd"] == str(session_workspace)
+    assert dummy_env.calls[0][2] == str(session_workspace)
+
+
+def test_docker_workspace_change_recreates_env_for_different_session_mounts(monkeypatch, tmp_path):
+    from gateway.session_context import clear_session_vars, set_session_vars
+
+    global_workspace = tmp_path / "global"
+    workspace_a = tmp_path / "workspace-a"
+    workspace_b = tmp_path / "workspace-b"
+    global_workspace.mkdir()
+    workspace_a.mkdir()
+    workspace_b.mkdir()
+
+    monkeypatch.setenv("TERMINAL_ENV", "docker")
+    monkeypatch.setenv("TERMINAL_CWD", str(global_workspace))
+    monkeypatch.setenv("TERMINAL_DOCKER_MOUNT_CWD_TO_WORKSPACE", "true")
+
+    created = []
+
+    class DummyEnv:
+        def __init__(self, task_id, cwd, host_cwd):
+            self.task_id = task_id
+            self.cwd = cwd
+            self.host_cwd = host_cwd
+            self.calls = []
+            self.env = {}
+
+        def execute(self, command, **kwargs):
+            execution_cwd = kwargs.get("cwd") or self.cwd
+            self.calls.append((command, kwargs, execution_cwd, self.cwd, self.host_cwd))
+            self.cwd = execution_cwd
+            return {"output": execution_cwd, "returncode": 0}
+
+    def fake_create_environment(*, env_type, image, cwd, timeout, ssh_config=None,
+                                container_config=None, local_config=None,
+                                task_id="default", host_cwd=None):
+        env = DummyEnv(task_id=task_id, cwd=cwd, host_cwd=host_cwd)
+        created.append(env)
+        return env
+
+    monkeypatch.setattr(terminal_tool, "_start_cleanup_thread", lambda: None)
+    monkeypatch.setattr(terminal_tool, "_check_all_guards", lambda *_args, **_kwargs: {"approved": True})
+    monkeypatch.setattr(terminal_tool, "_create_environment", fake_create_environment)
+    monkeypatch.setattr(terminal_tool, "_active_environments", {})
+    monkeypatch.setattr(terminal_tool, "_last_activity", {})
+    monkeypatch.setattr(terminal_tool, "_creation_locks", {})
+
+    tokens = set_session_vars(working_dir=str(workspace_a))
+    try:
+        result_a = json.loads(terminal_tool.terminal_tool(command="pwd"))
+    finally:
+        clear_session_vars(tokens)
+
+    tokens = set_session_vars(working_dir=str(workspace_b))
+    try:
+        result_b = json.loads(terminal_tool.terminal_tool(command="pwd"))
+    finally:
+        clear_session_vars(tokens)
+
+    assert result_a["output"] == "/workspace"
+    assert result_b["output"] == "/workspace"
+    assert len(created) == 2
+    assert created[0].host_cwd == str(workspace_a)
+    assert created[1].host_cwd == str(workspace_b)
+    assert created[0].task_id != created[1].task_id
+
+
+def test_foreground_explicit_workdir_overrides_session_cwd_without_persisting(monkeypatch, tmp_path):
+    from gateway.session_context import clear_session_vars, get_effective_cwd, set_session_vars
+
+    session_workspace = tmp_path / "session-workspace"
+    explicit_workspace = tmp_path / "explicit-workspace"
+    session_workspace.mkdir()
+    explicit_workspace.mkdir()
+    monkeypatch.setenv("TERMINAL_ENV", "local")
+
+    class DummyEnv:
+        def __init__(self):
+            self.cwd = str(session_workspace)
+            self.calls = []
+            self.env = {}
+
+        def execute(self, command, **kwargs):
+            execution_cwd = kwargs.get("cwd") or self.cwd
+            self.calls.append((command, kwargs, execution_cwd, self.cwd))
+            return {"output": execution_cwd, "returncode": 0}
+
+    dummy_env = DummyEnv()
+    monkeypatch.setattr(terminal_tool, "_start_cleanup_thread", lambda: None)
+    monkeypatch.setattr(terminal_tool, "_check_all_guards", lambda *_args, **_kwargs: {"approved": True})
+    monkeypatch.setattr(terminal_tool, "_active_environments", {"default": dummy_env})
+    monkeypatch.setattr(terminal_tool, "_last_activity", {"default": 0})
+    tokens = set_session_vars(working_dir=str(session_workspace))
+
+    try:
+        result = json.loads(terminal_tool.terminal_tool(command="pwd", workdir=str(explicit_workspace)))
+        assert get_effective_cwd() == str(session_workspace)
+    finally:
+        clear_session_vars(tokens)
+
+    assert result["output"] == str(explicit_workspace)
+    assert dummy_env.calls[0][1]["cwd"] == str(explicit_workspace)
+    assert dummy_env.calls[0][2] == str(explicit_workspace)
+    assert dummy_env.cwd == str(session_workspace)
+
+
+def test_nonlocal_background_spawn_uses_session_effective_cwd(monkeypatch, tmp_path):
+    from gateway.session_context import clear_session_vars, set_session_vars
+
+    session_workspace = tmp_path / "session-workspace"
+    global_workspace = tmp_path / "global-workspace"
+    session_workspace.mkdir()
+    global_workspace.mkdir()
+    monkeypatch.setenv("TERMINAL_ENV", "docker")
+    monkeypatch.setenv("TERMINAL_CWD", str(global_workspace))
+
+    class DummyEnv:
+        def __init__(self):
+            self.cwd = str(global_workspace)
+            self.env = {}
+
+    class FakeProcessSession:
+        id = "proc-session"
+        pid = 1234
+
+    captured = {}
+
+    def fake_spawn_via_env(**kwargs):
+        captured.update(kwargs)
+        return FakeProcessSession()
+
+    dummy_env = DummyEnv()
+    monkeypatch.setattr(terminal_tool, "_start_cleanup_thread", lambda: None)
+    monkeypatch.setattr(terminal_tool, "_check_all_guards", lambda *_args, **_kwargs: {"approved": True})
+    monkeypatch.setattr(terminal_tool, "_active_environments", {"default": dummy_env})
+    monkeypatch.setattr(terminal_tool, "_last_activity", {"default": 0})
+    monkeypatch.setattr("tools.process_registry.process_registry.spawn_via_env", fake_spawn_via_env)
+    tokens = set_session_vars(working_dir=str(session_workspace))
+
+    try:
+        result = json.loads(terminal_tool.terminal_tool(command="python worker.py", background=True))
+    finally:
+        clear_session_vars(tokens)
+
+    assert result["session_id"] == "proc-session"
+    assert captured["env"] is dummy_env
+    assert captured["command"] == "python worker.py"
+    assert captured["cwd"] == str(session_workspace)
