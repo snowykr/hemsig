@@ -12,6 +12,7 @@ Uses discord.py library for:
 import asyncio
 import logging
 import os
+import re
 import struct
 import subprocess
 import tempfile
@@ -42,7 +43,6 @@ from pathlib import Path as _Path
 sys.path.insert(0, str(_Path(__file__).resolve().parents[2]))
 
 from gateway.config import Platform, PlatformConfig
-import re
 
 from gateway.platforms.helpers import MessageDeduplicator, ThreadParticipationTracker
 from gateway.platforms.base import (
@@ -116,6 +116,50 @@ def _build_allowed_mentions():
         users=_b("DISCORD_ALLOW_MENTION_USERS", True),
         replied_user=_b("DISCORD_ALLOW_MENTION_REPLIED_USER", True),
     )
+
+
+_DISCORD_USER_MENTION_RE = re.compile(r"^<@!?(\d+)>\s*")
+
+
+def _clean_discord_user_id_for_mention(value: Any) -> str:
+    """Normalize a configured/request user id into a bare numeric Discord ID."""
+    raw = _clean_discord_id(str(value or ""))
+    return raw if raw.isdigit() else ""
+
+
+def _resolve_discord_mention_user_id(metadata: Optional[Dict[str, Any]]) -> str:
+    """Resolve the Discord user to mention for outbound status/report messages."""
+    if isinstance(metadata, dict):
+        for key in ("mention_user_id", "user_id", "discord_user_id"):
+            cleaned = _clean_discord_user_id_for_mention(metadata.get(key))
+            if cleaned:
+                return cleaned
+    return ""
+
+
+def _prefix_discord_user_mention(content: str, mention_user_id: str) -> str:
+    """Prefix content with a Discord user mention unless it is already present."""
+    text = str(content or "")
+    cleaned = _clean_discord_user_id_for_mention(mention_user_id)
+    if not cleaned or not text.strip():
+        return text
+    stripped = text.lstrip()
+    if stripped.startswith(f"<@{cleaned}>") or stripped.startswith(f"<@!{cleaned}>"):
+        return text
+    return f"<@{cleaned}> {text}"
+
+
+def _preserve_existing_leading_mention(previous_content: str, new_content: str) -> str:
+    """Keep the leading user mention when editing an existing Discord message."""
+    prior = str(previous_content or "")
+    updated = str(new_content or "")
+    if not updated.strip():
+        return updated
+    match = _DISCORD_USER_MENTION_RE.match(prior.lstrip())
+    if not match:
+        return updated
+    mention_user_id = match.group(1)
+    return _prefix_discord_user_mention(updated, mention_user_id)
 
 
 class VoiceReceiver:
@@ -1104,6 +1148,9 @@ class DiscordAdapter(BasePlatformAdapter):
                 if not channel:
                     return SendResult(success=False, error=f"Channel {chat_id} not found")
 
+            mention_user_id = _resolve_discord_mention_user_id(metadata)
+            content = _prefix_discord_user_mention(content, mention_user_id)
+
             # Forum channels reject channel.send() — create a thread post instead.
             if self._is_forum_parent(channel):
                 return await self._send_to_forum(channel, content)
@@ -1301,7 +1348,11 @@ class DiscordAdapter(BasePlatformAdapter):
             if not channel:
                 channel = await self._client.fetch_channel(int(chat_id))
             msg = await channel.fetch_message(int(message_id))
-            formatted = self.format_message(content)
+            preserved_content = _preserve_existing_leading_mention(
+                getattr(msg, "content", ""),
+                content,
+            )
+            formatted = self.format_message(preserved_content)
             if len(formatted) > self.MAX_MESSAGE_LENGTH:
                 formatted = formatted[:self.MAX_MESSAGE_LENGTH - 3] + "..."
             await msg.edit(content=formatted)

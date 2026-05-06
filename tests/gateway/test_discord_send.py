@@ -159,6 +159,105 @@ async def test_send_does_not_retry_on_unrelated_errors():
     assert send_calls[0]["reference"] is reference_obj
 
 
+@pytest.mark.asyncio
+async def test_send_prefixes_metadata_discord_mention():
+    adapter = DiscordAdapter(PlatformConfig(enabled=True, token="***"))
+
+    sent_msg = SimpleNamespace(id=1234)
+    send_calls = []
+
+    async def fake_send(*, content, reference=None):
+        send_calls.append({"content": content, "reference": reference})
+        return sent_msg
+
+    channel = SimpleNamespace(send=AsyncMock(side_effect=fake_send))
+    adapter._client = SimpleNamespace(
+        get_channel=lambda _chat_id: channel,
+        fetch_channel=AsyncMock(),
+    )
+
+    result = await adapter.send(
+        "555",
+        "hello status update",
+        metadata={"mention_user_id": "537237522418368522"},
+    )
+
+    assert result.success is True
+    assert send_calls[0]["content"] == "<@537237522418368522> hello status update"
+
+
+@pytest.mark.asyncio
+async def test_send_does_not_prefix_without_explicit_mention_metadata(monkeypatch):
+    adapter = DiscordAdapter(PlatformConfig(enabled=True, token="***"))
+
+    sent_msg = SimpleNamespace(id=1234)
+    send_calls = []
+
+    async def fake_send(*, content, reference=None):
+        send_calls.append({"content": content, "reference": reference})
+        return sent_msg
+
+    channel = SimpleNamespace(send=AsyncMock(side_effect=fake_send))
+    adapter._client = SimpleNamespace(
+        get_channel=lambda _chat_id: channel,
+        fetch_channel=AsyncMock(),
+    )
+
+    monkeypatch.setenv("DISCORD_MENTION_USER_ID", "537237522418368522")
+    result = await adapter.send("555", "normal reply")
+
+    assert result.success is True
+    assert send_calls[0]["content"] == "normal reply"
+
+
+@pytest.mark.asyncio
+async def test_send_prefers_metadata_mention_and_avoids_double_prefix(monkeypatch):
+    adapter = DiscordAdapter(PlatformConfig(enabled=True, token="***"))
+
+    sent_msg = SimpleNamespace(id=1234)
+    send_calls = []
+
+    async def fake_send(*, content, reference=None):
+        send_calls.append({"content": content, "reference": reference})
+        return sent_msg
+
+    channel = SimpleNamespace(send=AsyncMock(side_effect=fake_send))
+    adapter._client = SimpleNamespace(
+        get_channel=lambda _chat_id: channel,
+        fetch_channel=AsyncMock(),
+    )
+
+    monkeypatch.setenv("DISCORD_MENTION_USER_ID", "111")
+    result = await adapter.send(
+        "555",
+        "<@537237522418368522> already tagged",
+        metadata={"mention_user_id": "<@537237522418368522>"},
+    )
+
+    assert result.success is True
+    assert send_calls[0]["content"] == "<@537237522418368522> already tagged"
+
+
+@pytest.mark.asyncio
+async def test_edit_message_preserves_existing_leading_mention():
+    adapter = DiscordAdapter(PlatformConfig(enabled=True, token="***"))
+
+    msg = SimpleNamespace(
+        content="<@537237522418368522> old progress",
+        edit=AsyncMock(),
+    )
+    channel = SimpleNamespace(fetch_message=AsyncMock(return_value=msg))
+    adapter._client = SimpleNamespace(
+        get_channel=lambda _chat_id: channel,
+        fetch_channel=AsyncMock(),
+    )
+
+    result = await adapter.edit_message("555", "99", "updated progress")
+
+    assert result.success is True
+    msg.edit.assert_awaited_once_with(content="<@537237522418368522> updated progress")
+
+
 # ---------------------------------------------------------------------------
 # Forum channel tests
 # ---------------------------------------------------------------------------

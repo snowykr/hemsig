@@ -1975,6 +1975,13 @@ OPTIONAL_ENV_VARS = {
         "password": False,
         "category": "messaging",
     },
+    "DISCORD_MENTION_USER_ID": {
+        "description": "Default Discord user ID to mention on outbound progress/final reports when no live request user is available",
+        "prompt": "Default Discord mention user ID (optional)",
+        "url": None,
+        "password": False,
+        "category": "messaging",
+    },
     "DISCORD_REPLY_TO_MODE": {
         "description": "Discord reply threading mode: 'off' (no reply references), 'first' (reply on first message only, default), 'all' (reply on every chunk)",
         "prompt": "Discord reply mode (off/first/all)",

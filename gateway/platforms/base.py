@@ -34,6 +34,15 @@ _TELEGRAM_AUDIO_ATTACHMENT_EXTS = frozenset({'.mp3', '.m4a'})
 _TELEGRAM_VOICE_EXTS = frozenset({'.ogg', '.opus'})
 
 
+def _outbound_report_metadata(source) -> dict | None:
+    """Build shared outbound metadata for status/report deliveries."""
+    metadata = {}
+    thread_id = getattr(source, "thread_id", None)
+    if thread_id:
+        metadata["thread_id"] = thread_id
+    return metadata or None
+
+
 def _platform_name(platform) -> str:
     """Normalize a Platform enum / raw string into a lowercase name."""
     value = getattr(platform, "value", platform)
@@ -2678,7 +2687,7 @@ class BasePlatformAdapter(ABC):
         self._active_sessions[session_key] = interrupt_event
         
         # Start continuous typing indicator (refreshes every 2 seconds)
-        _thread_metadata = {"thread_id": event.source.thread_id} if event.source.thread_id else None
+        _thread_metadata = _outbound_report_metadata(event.source)
         _keep_typing_kwargs = {"metadata": _thread_metadata}
         try:
             _keep_typing_sig = inspect.signature(self._keep_typing)
@@ -2983,7 +2992,7 @@ class BasePlatformAdapter(ABC):
             try:
                 error_type = type(e).__name__
                 error_detail = str(e)[:300] if str(e) else "no details available"
-                _thread_metadata = {"thread_id": event.source.thread_id} if event.source.thread_id else None
+                _thread_metadata = _outbound_report_metadata(event.source)
                 await self.send(
                     chat_id=event.source.chat_id,
                     content=(

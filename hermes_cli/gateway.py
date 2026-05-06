@@ -3096,6 +3096,15 @@ def _setup_standard_platform(platform: dict):
             save_env_value(home_var, first_id)
             print_success(f"  Home channel set to {first_id}")
 
+    if allowed_val_set and label == "Discord" and not get_env_value("DISCORD_MENTION_USER_ID"):
+        first_id = allowed_val_set.split(",")[0].strip()
+        if first_id and prompt_yes_no(
+            f"  Use your user ID ({first_id}) as the default mention target for Discord progress/report messages?",
+            True,
+        ):
+            save_env_value("DISCORD_MENTION_USER_ID", first_id)
+            print_success(f"  Default Discord mention target set to {first_id}")
+
     print()
     print_success(f"{emoji} {label} configured!")
 
