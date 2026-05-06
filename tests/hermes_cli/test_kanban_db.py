@@ -482,3 +482,59 @@ def test_tenant_propagates_to_events(kanban_home):
     # The "created" event should have tenant in its payload.
     created = [e for e in events if e.kind == "created"]
     assert created and created[0].payload.get("tenant") == "biz-a"
+
+
+# ---------------------------------------------------------------------------
+# latest_summary / latest_summaries — surface task_runs.summary handoffs
+# ---------------------------------------------------------------------------
+
+def test_latest_summary_returns_none_when_no_runs(kanban_home):
+    with kb.connect() as conn:
+        t = kb.create_task(conn, title="fresh", assignee="alice")
+        assert kb.latest_summary(conn, t) is None
+
+
+def test_latest_summary_returns_summary_after_complete(kanban_home):
+    handoff = "shipped 3 files, ran tests, opened PR #42"
+    with kb.connect() as conn:
+        t = kb.create_task(conn, title="work", assignee="alice")
+        kb.complete_task(conn, t, summary=handoff)
+        assert kb.latest_summary(conn, t) == handoff
+
+
+def test_latest_summary_picks_newest_when_multiple_runs(kanban_home):
+    with kb.connect() as conn:
+        t = kb.create_task(conn, title="retry", assignee="alice")
+        kb.complete_task(conn, t, summary="first attempt")
+        conn.execute(
+            "UPDATE tasks SET status='ready', completed_at=NULL WHERE id=?",
+            (t,),
+        )
+        time.sleep(1.05)
+        kb.complete_task(conn, t, summary="second attempt — final")
+        assert kb.latest_summary(conn, t) == "second attempt — final"
+
+
+def test_latest_summary_skips_empty_string(kanban_home):
+    with kb.connect() as conn:
+        t = kb.create_task(conn, title="t", assignee="alice")
+        kb.complete_task(conn, t, summary="real handoff")
+        conn.execute(
+            "INSERT INTO task_runs (task_id, status, started_at, ended_at, "
+            "outcome, summary) VALUES (?, 'done', ?, ?, 'completed', ?)",
+            (t, int(time.time()) + 1, int(time.time()) + 2, ""),
+        )
+        conn.commit()
+        assert kb.latest_summary(conn, t) == "real handoff"
+
+
+def test_latest_summaries_batch_omits_tasks_without_summary(kanban_home):
+    with kb.connect() as conn:
+        t1 = kb.create_task(conn, title="a", assignee="alice")
+        t2 = kb.create_task(conn, title="b", assignee="bob")
+        t3 = kb.create_task(conn, title="c", assignee="carol")
+        kb.complete_task(conn, t1, summary="alpha")
+        kb.complete_task(conn, t3, summary="charlie")
+        out = kb.latest_summaries(conn, [t1, t2, t3])
+        assert out == {t1: "alpha", t3: "charlie"}
+        assert kb.latest_summaries(conn, []) == {}
