@@ -17,6 +17,8 @@ import time
 import unittest
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from tools.delegate_tool import (
     DELEGATE_BLOCKED_TOOLS,
     DELEGATE_TASK_SCHEMA,
@@ -33,6 +35,19 @@ from tools.delegate_tool import (
     _resolve_child_credential_pool,
     _resolve_delegation_credentials,
 )
+
+
+@pytest.fixture(autouse=True)
+def _default_delegate_config(monkeypatch):
+    """Keep base delegate tests isolated from repo runtime defaults.
+
+    The product default delegation provider can legitimately point at a real
+    runtime (currently openai-codex). Most tests in this module exercise
+    delegation control flow and child wiring, not provider auth resolution, so
+    their baseline should be "inherit parent credentials unless a test opts in
+    to a provider override explicitly".
+    """
+    monkeypatch.setattr("tools.delegate_tool._load_config", lambda: {})
 
 
 def _make_mock_parent(depth=0):

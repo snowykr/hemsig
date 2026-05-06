@@ -6,6 +6,7 @@ rather than leaving zombie processes or telling users to manually restart
 when launchd will auto-respawn.
 """
 
+import signal
 import subprocess
 from types import SimpleNamespace
 from unittest.mock import patch, MagicMock
@@ -425,8 +426,11 @@ class TestCmdUpdateLaunchdRestart:
         captured = capsys.readouterr().out
         restart.assert_called_once_with("coder", 12345)
         graceful.assert_called_once()
-        # Graceful drain succeeded — no SIGTERM fallback needed.
-        kill.assert_not_called()
+        # Graceful drain succeeded, but survivor sweep may still SIGKILL a
+        # mocked PID that never disappears.
+        kill_calls = kill.call_args_list
+        assert all(call.args[0] == 12345 for call in kill_calls)
+        assert all(call.args[1] == signal.SIGKILL for call in kill_calls)
         assert "Restarting manual gateway profile(s): coder" in captured
         assert "Restart manually: hermes gateway run" not in captured
 
@@ -463,8 +467,10 @@ class TestCmdUpdateLaunchdRestart:
         captured = capsys.readouterr().out
         restart.assert_called_once_with("coder", 12345)
         graceful.assert_called_once()
-        # Graceful drain returned False → SIGTERM fallback.
-        kill.assert_called_once()
+        # Graceful drain returned False → SIGTERM fallback, then survivor
+        # sweep may escalate to SIGKILL when the mocked PID persists.
+        assert kill.call_args_list[0].args == (12345, signal.SIGTERM)
+        assert all(call.args[0] == 12345 for call in kill.call_args_list)
         assert "Restarting manual gateway profile(s): coder" in captured
 
     @patch("shutil.which", return_value=None)
@@ -887,7 +893,8 @@ class TestServicePidExclusion:
         assert "Restarted" in captured
         # Manual PID should be killed
         manual_kills = [c for c in mock_kill.call_args_list if c.args[0] == MANUAL_PID]
-        assert len(manual_kills) == 1
+        assert len(manual_kills) >= 1
+        assert manual_kills[0].args == (MANUAL_PID, signal.SIGTERM)
         # Service PID should NOT be killed
         service_kills = [c for c in mock_kill.call_args_list if c.args[0] == SERVICE_PID]
         assert len(service_kills) == 0

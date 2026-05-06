@@ -19,6 +19,12 @@ from tools.delegate_tool import delegate_task
 from hermes_cli import plugins
 
 
+@pytest.fixture(autouse=True)
+def _default_delegate_config(monkeypatch):
+    """Subagent-stop hook tests care about delegate lifecycle, not auth."""
+    monkeypatch.setattr("tools.delegate_tool._load_config", lambda: {})
+
+
 def _make_parent(depth: int = 0, session_id: str = "parent-1"):
     parent = MagicMock()
     parent.base_url = "https://openrouter.ai/api/v1"
