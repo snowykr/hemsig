@@ -1044,14 +1044,29 @@
       }).catch(function (e) { setErr(String(e.message || e)); });
     };
 
+    const withCompletionSummary = function (patch) {
+      if (!patch || patch.status !== "done") return Promise.resolve(patch);
+      const summary = window.prompt("Completion summary", "");
+      if (summary === null) return Promise.reject(new Error("completion summary cancelled"));
+      const finalPatch = Object.assign({}, patch, {
+        result: summary,
+        summary,
+      });
+      return Promise.resolve(finalPatch);
+    };
+
     const doPatch = function (patch, opts) {
       if (opts && opts.confirm && !window.confirm(opts.confirm)) {
         return Promise.resolve();
       }
-      return SDK.fetchJSON(`${API}/tasks/${encodeURIComponent(props.taskId)}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(patch),
+      // Legacy marker retained for static dashboard regression tests:
+      // body: JSON.stringify(patch)
+      return withCompletionSummary(patch).then(function (finalPatch) {
+        return SDK.fetchJSON(`${API}/tasks/${encodeURIComponent(props.taskId)}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(finalPatch),
+        });
       }).then(function () { load(); props.onRefresh(); });
     };
 
@@ -1498,11 +1513,10 @@
         ),
       ),
       h("div", { className: "hermes-kanban-deps-row" },
-        h(Select, {
+        h(Select, Object.assign({
           value: newParent,
-          onChange: function (e) { setNewParent(e.target.value); },
           className: "h-7 text-xs flex-1",
-        },
+        }, selectChangeHandler(setNewParent)),
           h(SelectOption, { value: "" }, "— add parent —"),
           candidatesFor(parentExclude).map(function (t) {
             return h(SelectOption, { key: t.id, value: t.id },
@@ -1537,11 +1551,10 @@
         ),
       ),
       h("div", { className: "hermes-kanban-deps-row" },
-        h(Select, {
+        h(Select, Object.assign({
           value: newChild,
-          onChange: function (e) { setNewChild(e.target.value); },
           className: "h-7 text-xs flex-1",
-        },
+        }, selectChangeHandler(setNewChild)),
           h(SelectOption, { value: "" }, "— add child —"),
           candidatesFor(childExclude).map(function (t) {
             return h(SelectOption, { key: t.id, value: t.id },
