@@ -164,6 +164,86 @@ scripts/run_tests.sh
 
 ---
 
+## Fork Upstream Sync Tracking
+
+This repository is a **selective-port fork** of `NousResearch/hermes-agent:main`, not a full upstream merge.
+When pulling new upstream work, use this section as the checkpoint so you know which upstream commits were already reviewed and which local commits correspond to those ports.
+
+### Sync snapshot
+
+- Upstream repo / branch: `NousResearch/hermes-agent:main`
+- Fork checkpoint after this selective sync wave: `6c8d305fec42e5b149186f309e62fe3d9df1c699` (`fix(kanban): expose created_cards in tool schema`)
+- Upstream merge-base before this selective sync wave: `f903ceece034eb8f27b03d241c1f14eafca6c5ea`
+- Newest upstream commit reviewed and imported/adapted in this wave: `aa88dcc57b1717cbcfb80e4eca580a3a77056702`
+- Divergence snapshot at sync time: `24 commits ahead / 477 commits behind`
+- Review window date: `2026-05-06`
+
+### Upstream commits already imported or adapted
+
+These upstream commits were either cherry-picked directly or adapted to fit fork-specific structure.
+
+| Upstream commit(s) | Local commit(s) | Notes |
+|---|---|---|
+| `477e4a2f`, `f27fcb6a` | `e92a9d65` | Added `deepseek/deepseek-v4-pro` and `x-ai/grok-4.3` model catalog entries. |
+| `3082fa08` | `50eb84b3` | Ported Hindsight append-support probing. |
+| `0d41e94c`, `c4b287ba`, `98513385`, `39f451f5` | `d7655d57`, `0c6f2477`, `245ae78f` | Adapted into the fork’s **dashboard i18n** layer (`web/src/i18n/*`), not the old upstream backend locale tree. |
+| `aa88dcc5`, `f0d27841` | `a5f0ad44`, `7c3f7717`, `1df17b27`, `693caac6` | Ported memory-authority wording, `/compress` cache eviction, and `kanban.max_spawn` gateway wiring. |
+| `3188e63b` | `d36a8261` | Ported API server SSE batching, payload trimming, error-finalization, and 10 MB request-size support. |
+| `56b47951`, `b28ab4fc`, `8a1a42d0` | `4bb508f7`, `4813c1c1`, `2a4f7ea9` | Ported kanban run-id lifecycle guards and current-run max-runtime accounting. |
+| `6d302b34` | `bfb2b2d8`, `6c8d305f` | Ported `created_cards` verification / linked-child acceptance / phantom-ref scanning, plus exposed `created_cards` in the kanban tool schema. |
+| `d2c6ecee`, `3f972974`, `a49670c2` | `dd0d473a`, `960048d5`, `1aa0ff5c` | Ported kanban dashboard/task-view protections and latest-summary surfacing; bundled dashboard action fixes were adapted locally. |
+| `eda326df` | `a42afe92` | Ported doctor reporting for runtime-gated kanban worker tools. |
+
+### Reviewed but intentionally not imported in this wave
+
+These were reviewed during the same sync pass and intentionally left out or only partially adapted:
+
+- `e598e185` — docs-only (`/model` alias documentation)
+- `fab3ad97`, `735349c6` — release / `AUTHOR_MAP` metadata only
+- `f0b95cc9`, `2d4eaed1` — Arcee-specific behavior/tests not needed for this fork
+- Upstream backend locale file layout (`agent/i18n.py`, `locales/*.yaml`) was **not** restored; equivalent locale support was adapted into the dashboard frontend instead
+
+### Manual-adaptation hotspots
+
+Do **not** blindly cherry-pick into these areas without checking fork semantics first:
+
+- `gateway/run.py`
+- `gateway/platforms/api_server.py`
+- `hermes_cli/kanban.py`
+- `hermes_cli/kanban_db.py`
+- `tools/kanban_tools.py`
+- `hermes_cli/main.py`
+- `hermes_cli/profiles.py`
+- `hermes_cli/commands.py`
+- `hermes_cli/model_switch.py`
+- `hermes_cli/runtime_provider.py`
+- `tui_gateway/server.py`
+
+### Where to resume next time
+
+This fork does **not** use a contiguous upstream merge, so do not assume “everything older than the newest imported upstream commit is already applied.”
+
+Use this process:
+
+1. `git fetch upstream`
+2. Review commits on `NousResearch/hermes-agent:main` **newer than `aa88dcc57b1717cbcfb80e4eca580a3a77056702`** first.
+3. Then compare the current upstream history against the imported/skipped table above.
+4. If you are resuming from the same upstream snapshot reviewed on `2026-05-06`, the first explicitly reviewed-but-not-imported commit after the top imported block is `e598e18529c02116da5716728d48697f2c82a129`.
+
+### Verification used for this sync wave
+
+- Integrated regression pass: `1542 passed`
+- Dashboard build: `npm run build` passed
+- Manual sanity checks performed for:
+  - model catalog entries
+  - Hindsight append-target resolution
+  - kanban `latest_summary` projection
+  - doctor runtime-gated kanban detail
+
+Keep this section updated whenever selective upstream ports are applied so the next sync can resume from a known checkpoint instead of re-triaging the same commit window.
+
+---
+
 ## Community
 
 - 💬 [Discord](https://discord.gg/NousResearch)
