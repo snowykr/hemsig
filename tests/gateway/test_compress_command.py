@@ -54,13 +54,15 @@ def _make_runner(history: list[dict[str, str]]):
     runner.session_store.rewrite_transcript = MagicMock()
     runner.session_store.update_session = MagicMock()
     runner.session_store._save = MagicMock()
-    return runner
+    evict_mock = MagicMock()
+    runner._evict_cached_agent = evict_mock
+    return runner, evict_mock
 
 
 @pytest.mark.asyncio
 async def test_compress_command_reports_noop_without_success_banner():
     history = _make_history()
-    runner = _make_runner(history)
+    runner, evict_mock = _make_runner(history)
     agent_instance = MagicMock()
     agent_instance.shutdown_memory_provider = MagicMock()
     agent_instance.close = MagicMock()
@@ -85,6 +87,9 @@ async def test_compress_command_reports_noop_without_success_banner():
     assert "No changes from compression" in result
     assert "Compressed:" not in result
     assert "Approx request size: ~100 tokens (unchanged)" in result
+    evict_mock.assert_called_once_with(
+        runner.session_store.get_or_create_session.return_value.session_key
+    )
     agent_instance.shutdown_memory_provider.assert_called_once()
     agent_instance.close.assert_called_once()
 
@@ -97,7 +102,7 @@ async def test_compress_command_explains_when_token_estimate_rises():
         {"role": "assistant", "content": "Dense summary that still counts as more tokens."},
         history[-1],
     ]
-    runner = _make_runner(history)
+    runner, evict_mock = _make_runner(history)
     agent_instance = MagicMock()
     agent_instance.shutdown_memory_provider = MagicMock()
     agent_instance.close = MagicMock()
@@ -125,6 +130,9 @@ async def test_compress_command_explains_when_token_estimate_rises():
     assert "Compressed: 4 → 3 messages" in result
     assert "Approx request size: ~100 → ~120 tokens" in result
     assert "denser summaries" in result
+    evict_mock.assert_called_once_with(
+        runner.session_store.get_or_create_session.return_value.session_key
+    )
     agent_instance.shutdown_memory_provider.assert_called_once()
     agent_instance.close.assert_called_once()
 
@@ -143,7 +151,7 @@ async def test_compress_command_appends_warning_when_summary_generation_fails():
         {"role": "assistant", "content": "[fallback placeholder]"},
         history[-1],
     ]
-    runner = _make_runner(history)
+    runner, evict_mock = _make_runner(history)
     agent_instance = MagicMock()
     agent_instance.shutdown_memory_provider = MagicMock()
     agent_instance.close = MagicMock()
@@ -185,6 +193,9 @@ async def test_compress_command_appends_warning_when_summary_generation_fails():
     # Dropped count must be visible — silently losing N messages is the bug.
     assert "7" in result
     assert "historical message(s) were removed" in result
+    evict_mock.assert_called_once_with(
+        runner.session_store.get_or_create_session.return_value.session_key
+    )
     agent_instance.shutdown_memory_provider.assert_called_once()
     agent_instance.close.assert_called_once()
 
@@ -202,7 +213,7 @@ async def test_compress_command_surfaces_aux_model_failure_even_when_recovered()
         {"role": "assistant", "content": "summary via main model"},
         history[-1],
     ]
-    runner = _make_runner(history)
+    runner, evict_mock = _make_runner(history)
     agent_instance = MagicMock()
     agent_instance.shutdown_memory_provider = MagicMock()
     agent_instance.close = MagicMock()
@@ -249,5 +260,8 @@ async def test_compress_command_surfaces_aux_model_failure_even_when_recovered()
     assert "auxiliary.compression.model" in result
     # The user's context is explicitly called out as intact
     assert "intact" in result
+    evict_mock.assert_called_once_with(
+        runner.session_store.get_or_create_session.return_value.session_key
+    )
     agent_instance.shutdown_memory_provider.assert_called_once()
     agent_instance.close.assert_called_once()

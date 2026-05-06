@@ -2711,3 +2711,69 @@ def test_gateway_dispatcher_watcher_env_truthy_uses_config(monkeypatch):
             timeout=3.0,
         )
     )
+
+
+def test_gateway_dispatcher_watcher_passes_max_spawn(monkeypatch):
+    """kanban.max_spawn should be threaded into dispatch_once."""
+    import asyncio
+    from gateway.run import GatewayRunner
+    import hermes_cli.config as _cfg_mod
+    from hermes_cli import kanban_db as _kb
+
+    class _FakeCursor:
+        def fetchone(self):
+            return None
+
+    class _FakeConn:
+        def execute(self, *_args, **_kwargs):
+            return _FakeCursor()
+
+        def close(self):
+            return None
+
+    async def _no_sleep(*_args, **_kwargs):
+        return None
+
+    runner = object.__new__(GatewayRunner)
+    runner._running = True
+    seen = {}
+
+    def _dispatch_once(conn, **kwargs):
+        seen["conn"] = conn
+        seen.update(kwargs)
+        runner._running = False
+
+        class _Res:
+            spawned = []
+            reclaimed = 0
+            crashed = []
+            timed_out = []
+            promoted = 0
+            auto_blocked = []
+
+        return _Res()
+
+    monkeypatch.setattr(asyncio, "sleep", _no_sleep)
+    monkeypatch.setattr(
+        _cfg_mod,
+        "load_config",
+        lambda: {
+            "kanban": {
+                "dispatch_in_gateway": True,
+                "dispatch_interval_seconds": 1,
+                "max_spawn": 7,
+            }
+        },
+    )
+    monkeypatch.setattr(_kb, "connect", lambda: _FakeConn())
+    monkeypatch.setattr(_kb, "init_db", lambda: None)
+    monkeypatch.setattr(_kb, "dispatch_once", _dispatch_once)
+
+    asyncio.run(
+        asyncio.wait_for(
+            runner._kanban_dispatcher_watcher(),
+            timeout=3.0,
+        )
+    )
+
+    assert seen["max_spawn"] == 7

@@ -3445,6 +3445,7 @@ class GatewayRunner:
         interval = float(kanban_cfg.get("dispatch_interval_seconds", 60) or 60)
         if interval < 1.0:
             interval = 1.0  # sanity floor — tighter than this is a footgun
+        max_spawn = kanban_cfg.get("max_spawn")
 
         # Initial delay so the gateway finishes wiring adapters before the
         # dispatcher spawns workers (those workers may hit gateway notify
@@ -3469,7 +3470,7 @@ class GatewayRunner:
                     _kb.init_db()  # idempotent, handles first-run
                 except Exception:
                     pass
-                return _kb.dispatch_once(conn)
+                return _kb.dispatch_once(conn, max_spawn=max_spawn)
             except Exception:
                 logger.exception("kanban dispatcher: tick failed")
                 return None
@@ -6064,6 +6065,7 @@ class GatewayRunner:
                                                 _werr,
                                             )
                                 finally:
+                                    self._evict_cached_agent(session_key)
                                     self._cleanup_agent_resources(_hyg_agent)
 
                     except Exception as e:
@@ -6252,7 +6254,7 @@ class GatewayRunner:
                 if _is_ctx_fail:
                     response = (
                         "⚠️ Session too large for the model's context window.\n"
-                        "Use /compact to compress the conversation, or "
+                        "Use /compress to compress the conversation, or "
                         "/reset to start fresh."
                     )
                 else:
@@ -6594,7 +6596,7 @@ class GatewayRunner:
                 if _hist_len > 50:
                     return (
                         "⚠️ Session too large for the model's context window.\n"
-                        "Use /compact to compress the conversation, or "
+                        "Use /compress to compress the conversation, or "
                         "/reset to start fresh."
                     )
                 elif status_code == 400:
@@ -9133,6 +9135,7 @@ class GatewayRunner:
                 _aux_fail_model = getattr(compressor, "_last_aux_model_failure_model", None)
                 _aux_fail_err = getattr(compressor, "_last_aux_model_failure_error", None)
             finally:
+                self._evict_cached_agent(session_key)
                 self._cleanup_agent_resources(tmp_agent)
             lines = [f"🗜️ {summary['headline']}"]
             if focus_topic:
