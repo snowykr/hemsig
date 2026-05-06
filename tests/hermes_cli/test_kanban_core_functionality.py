@@ -2863,3 +2863,149 @@ def test_gateway_dispatcher_watcher_passes_max_spawn(monkeypatch):
     )
 
     assert seen["max_spawn"] == 7
+
+def test_complete_with_phantom_created_cards_raises_and_audits(kanban_home):
+    """A completion claiming a card id that doesn't exist raises
+    HallucinatedCardsError, leaves the task in its prior state, and
+    records a ``completion_blocked_hallucination`` event for auditing."""
+    conn = kb.connect()
+    try:
+        parent = kb.create_task(conn, title="parent", assignee="alice")
+        real = kb.create_task(conn, title="real", assignee="x", created_by="alice")
+        phantom_id = "t_deadbeefcafe"
+
+        with pytest.raises(kb.HallucinatedCardsError) as excinfo:
+            kb.complete_task(
+                conn, parent,
+                summary="claimed phantom",
+                created_cards=[real, phantom_id],
+            )
+        assert excinfo.value.phantom == [phantom_id]
+
+        # Task still in prior state (ready, not done).
+        row = conn.execute(
+            "SELECT status FROM tasks WHERE id=?", (parent,),
+        ).fetchone()
+        assert row["status"] == "ready"
+
+        # Audit event landed.
+        kinds = [
+            r["kind"] for r in conn.execute(
+                "SELECT kind FROM task_events WHERE task_id=? ORDER BY id",
+                (parent,),
+            )
+        ]
+        assert "completion_blocked_hallucination" in kinds
+        assert "completed" not in kinds
+    finally:
+        conn.close()
+
+
+def test_complete_with_cross_worker_card_is_rejected(kanban_home):
+    """A card that exists but was created by a different worker profile
+    is treated as phantom (hallucinated attribution)."""
+    conn = kb.connect()
+    try:
+        parent = kb.create_task(conn, title="parent", assignee="alice")
+        other = kb.create_task(conn, title="other", assignee="x", created_by="bob")
+
+        with pytest.raises(kb.HallucinatedCardsError) as excinfo:
+            kb.complete_task(
+                conn, parent,
+                summary="claiming someone else's card",
+                created_cards=[other],
+            )
+        assert excinfo.value.phantom == [other]
+    finally:
+        conn.close()
+
+
+def test_complete_accepts_cross_worker_card_when_linked_as_child(kanban_home):
+    """A card created by a different principal but explicitly linked as
+    a child of the completing task is accepted — the worker took
+    ownership via ``kanban_create(parents=[current_task])`` or an
+    explicit ``link_tasks`` call, which proves the relationship even
+    when ``created_by`` doesn't match.
+
+    (Relaxation salvaged from #20022 @LeonSGP43 — stricter version
+    would incorrectly reject legitimate orchestrator flows where a
+    specifier creates a card, then a worker picks it up and links it
+    to its own parent task.)
+    """
+    conn = kb.connect()
+    try:
+        parent = kb.create_task(conn, title="parent", assignee="alice")
+        # Card created by a DIFFERENT principal (not alice, not parent).
+        other = kb.create_task(
+            conn, title="other", assignee="x", created_by="bob",
+            parents=[parent],  # explicitly links as child of the completing task
+        )
+
+        ok = kb.complete_task(
+            conn, parent,
+            summary="completed with linked child",
+            created_cards=[other],
+        )
+        assert ok is True
+        # The card should appear in the completed event's verified_cards list.
+        import json as _json
+        row = conn.execute(
+            "SELECT payload FROM task_events "
+            "WHERE task_id=? AND kind='completed' ORDER BY id DESC LIMIT 1",
+            (parent,),
+        ).fetchone()
+        payload = _json.loads(row["payload"])
+        assert other in payload.get("verified_cards", [])
+    finally:
+        conn.close()
+
+
+def test_complete_prose_scan_flags_nonexistent_ids(kanban_home):
+    """Successful completion whose summary references a ``t_<hex>`` id
+    that doesn't resolve emits a ``suspected_hallucinated_references``
+    event. Does not block the completion."""
+    conn = kb.connect()
+    try:
+        parent = kb.create_task(conn, title="parent", assignee="x")
+        ok = kb.complete_task(
+            conn, parent,
+            summary="also saw t_abcd1234ffff failing in CI",
+        )
+        assert ok is True
+        kinds_and_payloads = list(conn.execute(
+            "SELECT kind, payload FROM task_events WHERE task_id=? ORDER BY id",
+            (parent,),
+        ))
+        kinds = [r["kind"] for r in kinds_and_payloads]
+        assert "suspected_hallucinated_references" in kinds
+        import json as _json
+        susp = [
+            _json.loads(r["payload"])
+            for r in kinds_and_payloads
+            if r["kind"] == "suspected_hallucinated_references"
+        ][0]
+        assert "t_abcd1234ffff" in susp["phantom_refs"]
+    finally:
+        conn.close()
+
+
+def test_complete_prose_scan_ignores_existing_ids(kanban_home):
+    """Summaries referencing real task ids don't emit a warning."""
+    conn = kb.connect()
+    try:
+        other = kb.create_task(conn, title="other", assignee="x")
+        parent = kb.create_task(conn, title="parent", assignee="x")
+        ok = kb.complete_task(
+            conn, parent,
+            summary=f"depended on {other}, now done",
+        )
+        assert ok is True
+        kinds = [
+            r["kind"] for r in conn.execute(
+                "SELECT kind FROM task_events WHERE task_id=? ORDER BY id",
+                (parent,),
+            )
+        ]
+        assert "suspected_hallucinated_references" not in kinds
+    finally:
+        conn.close()

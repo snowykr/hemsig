@@ -223,12 +223,21 @@ def _handle_complete(args: dict, **kw) -> str:
     try:
         kb, conn = _connect()
         try:
-            ok = kb.complete_task(
-                conn, tid,
-                result=result, summary=summary, metadata=metadata,
-                created_cards=created_cards,
-                expected_run_id=_worker_run_id(tid),
-            )
+            try:
+                ok = kb.complete_task(
+                    conn, tid,
+                    result=result, summary=summary, metadata=metadata,
+                    created_cards=created_cards,
+                    expected_run_id=_worker_run_id(tid),
+                )
+            except kb.HallucinatedCardsError as hall_err:
+                return tool_error(
+                    f"kanban_complete blocked: the following created_cards "
+                    f"do not exist or were not created by this worker: "
+                    f"{', '.join(hall_err.phantom)}. "
+                    f"Either omit them, use only ids returned from successful "
+                    f"kanban_create calls, or remove the created_cards field."
+                )
             if not ok:
                 return tool_error(
                     f"could not complete {tid} (unknown id or already terminal)"
