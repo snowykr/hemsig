@@ -176,6 +176,8 @@ class SessionContext:
     session_id: str = ""
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
+    project_dir: Optional[str] = None
+    working_dir: Optional[str] = None
     
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -189,6 +191,8 @@ class SessionContext:
             "session_id": self.session_id,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+            "project_dir": self.project_dir,
+            "working_dir": self.working_dir,
         }
 
 
@@ -491,6 +495,13 @@ class SessionEntry:
     resume_reason: Optional[str] = None  # e.g. "restart_timeout"
     last_resume_marked_at: Optional[datetime] = None
 
+    # Per-session workspace state.  ``project_dir`` is the thread/project root
+    # set by ``pdir ->>``; ``working_dir`` is the current default cwd set by
+    # either ``pdir ->>`` or ``cwd ->>``.  Both are gateway-session scoped and
+    # intentionally separate from the global terminal.cwd fallback.
+    project_dir: Optional[str] = None
+    working_dir: Optional[str] = None
+
     def to_dict(self) -> Dict[str, Any]:
         result = {
             "session_key": self.session_key,
@@ -517,6 +528,8 @@ class SessionEntry:
                 if self.last_resume_marked_at
                 else None
             ),
+            "project_dir": self.project_dir,
+            "working_dir": self.working_dir,
             "is_fresh_reset": self.is_fresh_reset,
         }
         if self.origin:
@@ -566,6 +579,8 @@ class SessionEntry:
             resume_pending=data.get("resume_pending", False),
             resume_reason=data.get("resume_reason"),
             last_resume_marked_at=last_resume_marked_at,
+            project_dir=data.get("project_dir"),
+            working_dir=data.get("working_dir"),
             is_fresh_reset=data.get("is_fresh_reset", False),
         )
 
@@ -923,6 +938,8 @@ class SessionStore:
                 was_auto_reset=was_auto_reset,
                 auto_reset_reason=auto_reset_reason,
                 reset_had_activity=reset_had_activity,
+                project_dir=(self._entries[session_key].project_dir if session_key in self._entries else None),
+                working_dir=(self._entries[session_key].working_dir if session_key in self._entries else None),
             )
 
             self._entries[session_key] = entry
@@ -963,6 +980,27 @@ class SessionStore:
                 if last_prompt_tokens is not None:
                     entry.last_prompt_tokens = last_prompt_tokens
                 self._save()
+
+    def update_workspace(
+        self,
+        session_key: str,
+        *,
+        project_dir: Optional[str] = None,
+        working_dir: Optional[str] = None,
+    ) -> Optional[SessionEntry]:
+        """Persist per-session workspace state for a gateway session."""
+        with self._lock:
+            self._ensure_loaded_locked()
+            entry = self._entries.get(session_key)
+            if entry is None:
+                return None
+            if project_dir is not None:
+                entry.project_dir = project_dir
+            if working_dir is not None:
+                entry.working_dir = working_dir
+            entry.updated_at = _now()
+            self._save()
+            return entry
 
     def suspend_session(self, session_key: str) -> bool:
         """Mark a session as suspended so it auto-resets on next access.
@@ -1144,6 +1182,8 @@ class SessionStore:
                 platform=old_entry.platform,
                 chat_type=old_entry.chat_type,
                 is_fresh_reset=True,
+                project_dir=old_entry.project_dir,
+                working_dir=old_entry.working_dir,
             )
 
             self._entries[session_key] = new_entry
@@ -1204,6 +1244,8 @@ class SessionStore:
                 display_name=old_entry.display_name,
                 platform=old_entry.platform,
                 chat_type=old_entry.chat_type,
+                project_dir=old_entry.project_dir,
+                working_dir=old_entry.working_dir,
             )
 
             self._entries[session_key] = new_entry
@@ -1377,5 +1419,7 @@ def build_session_context(
         context.session_id = session_entry.session_id
         context.created_at = session_entry.created_at
         context.updated_at = session_entry.updated_at
+        context.project_dir = session_entry.project_dir
+        context.working_dir = session_entry.working_dir
     
     return context

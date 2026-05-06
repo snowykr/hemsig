@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest.mock import patch, MagicMock
 from gateway.config import Platform, HomeChannel, GatewayConfig, PlatformConfig
 from gateway.session import (
+    SessionEntry,
     SessionSource,
     SessionStore,
     build_session_context,
@@ -13,6 +14,7 @@ from gateway.session import (
     build_session_key,
     canonical_whatsapp_identifier,
 )
+from datetime import datetime
 
 # Legacy name preserved for these tests; product renamed the function to
 # canonical_whatsapp_identifier.  Keep the tests referencing the old name
@@ -655,6 +657,100 @@ class TestSessionStoreSwitchSession:
         assert resumed["ended_at"] is None
         assert resumed["end_reason"] is None
         db.close()
+
+
+class TestSessionWorkspaceState:
+    def test_session_entry_workspace_roundtrip_and_legacy_defaults(self):
+        entry = SessionEntry(
+            session_key="key",
+            session_id="sid",
+            created_at=datetime(2025, 1, 1),
+            updated_at=datetime(2025, 1, 2),
+            project_dir="/tmp/project",
+            working_dir="/tmp/project/src",
+        )
+
+        restored = SessionEntry.from_dict(entry.to_dict())
+
+        assert restored.project_dir == "/tmp/project"
+        assert restored.working_dir == "/tmp/project/src"
+
+        legacy = SessionEntry.from_dict({
+            "session_key": "legacy",
+            "session_id": "sid",
+            "created_at": "2025-01-01T00:00:00",
+            "updated_at": "2025-01-01T00:00:00",
+        })
+        assert legacy.project_dir is None
+        assert legacy.working_dir is None
+
+    def test_workspace_state_survives_reset_resume_pending_and_switch(self, tmp_path):
+        config = GatewayConfig()
+        with patch("gateway.session.SessionStore._ensure_loaded"):
+            store = SessionStore(sessions_dir=tmp_path / "sessions", config=config)
+        store._db = None
+        store._loaded = True
+
+        source = SessionSource(
+            platform=Platform.DISCORD,
+            chat_id="channel-1",
+            chat_type="thread",
+            thread_id="thread-1",
+            user_id="alice",
+        )
+        entry = store.get_or_create_session(source)
+        entry.project_dir = "/tmp/project"
+        entry.working_dir = "/tmp/project/app"
+        store._save()
+
+        assert store.mark_resume_pending(entry.session_key) is True
+        resumed = store.get_or_create_session(source)
+        assert resumed.session_id == entry.session_id
+        assert resumed.project_dir == "/tmp/project"
+        assert resumed.working_dir == "/tmp/project/app"
+
+        reset = store.reset_session(entry.session_key)
+        assert reset is not None
+        assert reset.session_id != entry.session_id
+        assert reset.project_dir == "/tmp/project"
+        assert reset.working_dir == "/tmp/project/app"
+
+        switched = store.switch_session(entry.session_key, "older-session")
+        assert switched is not None
+        assert switched.session_id == "older-session"
+        assert switched.project_dir == "/tmp/project"
+        assert switched.working_dir == "/tmp/project/app"
+
+    def test_discord_thread_workspace_state_is_keyed_per_thread(self, tmp_path):
+        config = GatewayConfig()
+        with patch("gateway.session.SessionStore._ensure_loaded"):
+            store = SessionStore(sessions_dir=tmp_path / "sessions", config=config)
+        store._db = None
+        store._loaded = True
+
+        thread_a = SessionSource(
+            platform=Platform.DISCORD,
+            chat_id="channel-1",
+            chat_type="thread",
+            thread_id="thread-a",
+            user_id="alice",
+        )
+        thread_b = SessionSource(
+            platform=Platform.DISCORD,
+            chat_id="channel-1",
+            chat_type="thread",
+            thread_id="thread-b",
+            user_id="alice",
+        )
+
+        entry_a = store.get_or_create_session(thread_a)
+        entry_b = store.get_or_create_session(thread_b)
+        store.update_workspace(entry_a.session_key, project_dir="/tmp/a", working_dir="/tmp/a/src")
+        store.update_workspace(entry_b.session_key, project_dir="/tmp/b", working_dir="/tmp/b/src")
+
+        assert store.get_or_create_session(thread_a).working_dir == "/tmp/a/src"
+        assert store.get_or_create_session(thread_b).working_dir == "/tmp/b/src"
+        assert entry_a.session_key != entry_b.session_key
 
 
 class TestWhatsAppSessionKeyConsistency:
