@@ -198,6 +198,18 @@ class TestResolveChildCwd(unittest.TestCase):
             with patch.dict(os.environ, {"TERMINAL_CWD": td}):
                 self.assertEqual(_resolve_child_cwd("project", "/tmp/staging"), td)
 
+    def test_project_uses_session_effective_cwd_before_terminal_env(self):
+        import tempfile
+        from gateway.session_context import clear_session_vars, set_session_vars
+
+        with tempfile.TemporaryDirectory() as terminal_dir, tempfile.TemporaryDirectory() as session_dir:
+            with patch.dict(os.environ, {"TERMINAL_CWD": terminal_dir}):
+                tokens = set_session_vars(working_dir=session_dir)
+                try:
+                    self.assertEqual(_resolve_child_cwd("project", "/tmp/staging"), session_dir)
+                finally:
+                    clear_session_vars(tokens)
+
     def test_project_bogus_terminal_cwd_falls_back_to_getcwd(self):
         with patch.dict(os.environ, {"TERMINAL_CWD": "/does/not/exist/anywhere"}):
             self.assertEqual(_resolve_child_cwd("project", "/tmp/staging"), os.getcwd())

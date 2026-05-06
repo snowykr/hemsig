@@ -469,16 +469,17 @@ def _get_or_create_env(task_id: str):
         _active_environments, _env_lock, _create_environment,
         _get_env_config, _last_activity, _start_cleanup_thread,
         _creation_locks, _creation_locks_lock, _task_env_overrides,
-        _resolve_container_task_id,
+        _resolve_environment_cache_key,
     )
 
-    effective_task_id = _resolve_container_task_id(task_id)
+    config = _get_env_config()
+    effective_task_id = _resolve_environment_cache_key(task_id, config)
 
     # Fast path: environment already exists
     with _env_lock:
         if effective_task_id in _active_environments:
             _last_activity[effective_task_id] = time.time()
-            return _active_environments[effective_task_id], _get_env_config()["env_type"]
+            return _active_environments[effective_task_id], config["env_type"]
 
     # Slow path: create environment (same pattern as file_tools._get_file_ops)
     with _creation_locks_lock:
@@ -490,9 +491,8 @@ def _get_or_create_env(task_id: str):
         with _env_lock:
             if effective_task_id in _active_environments:
                 _last_activity[effective_task_id] = time.time()
-                return _active_environments[effective_task_id], _get_env_config()["env_type"]
+                return _active_environments[effective_task_id], config["env_type"]
 
-        config = _get_env_config()
         env_type = config["env_type"]
         overrides = _task_env_overrides.get(effective_task_id, {})
 
@@ -1468,7 +1468,11 @@ def _resolve_child_cwd(mode: str, staging_dir: str) -> str:
     """
     if mode != "project":
         return staging_dir
-    raw = os.environ.get("TERMINAL_CWD", "").strip()
+    try:
+        from gateway.session_context import get_effective_cwd
+        raw = get_effective_cwd("").strip()
+    except Exception:
+        raw = os.environ.get("TERMINAL_CWD", "").strip()
     if raw:
         expanded = os.path.expanduser(raw)
         if os.path.isdir(expanded):

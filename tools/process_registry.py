@@ -617,7 +617,7 @@ class ProcessRegistry:
         )
 
         try:
-            result = env.execute(bg_command, timeout=timeout)
+            result = env.execute(bg_command, cwd=cwd or "", timeout=timeout)
             output = result.get("output", "").strip()
             # Try to extract the PID from the output
             for line in output.splitlines():

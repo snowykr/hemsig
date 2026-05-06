@@ -476,8 +476,8 @@ class TestSpawnEnvSanitization:
             def get_temp_dir(self):
                 return "/data/data/com.termux/files/usr/tmp"
 
-            def execute(self, command, timeout=None):
-                self.commands.append((command, timeout))
+            def execute(self, command, cwd="", timeout=None):
+                self.commands.append((command, cwd, timeout))
                 return {"output": "4321\n"}
 
         env = FakeEnv()
@@ -496,6 +496,26 @@ class TestSpawnEnvSanitization:
         assert "cat /tmp/hermes_bg_" not in bg_command
         fake_thread.start.assert_called_once()
 
+    def test_spawn_via_env_passes_requested_cwd_to_backend(self, registry):
+        class FakeEnv:
+            def __init__(self):
+                self.commands = []
+
+            def execute(self, command, cwd="", timeout=None):
+                self.commands.append((command, cwd, timeout))
+                return {"output": "9876\n"}
+
+        env = FakeEnv()
+        fake_thread = MagicMock()
+
+        with patch("tools.process_registry.threading.Thread", return_value=fake_thread), \
+            patch.object(registry, "_write_checkpoint"):
+            session = registry.spawn_via_env(env, "pwd", cwd="/workspace/current", timeout=17)
+
+        assert session.pid == 9876
+        assert env.commands[0][1] == "/workspace/current"
+        assert env.commands[0][2] == 17
+
     def test_env_poller_quotes_temp_paths_with_spaces(self, registry):
         session = _make_session(sid="proc_space")
         session.exited = False
@@ -509,8 +529,8 @@ class TestSpawnEnvSanitization:
                     {"output": "0\n"},
                 ])
 
-            def execute(self, command, timeout=None):
-                self.commands.append((command, timeout))
+            def execute(self, command, cwd="", timeout=None):
+                self.commands.append((command, cwd, timeout))
                 return next(self._responses)
 
         env = FakeEnv()
