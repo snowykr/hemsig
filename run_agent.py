@@ -64,6 +64,7 @@ from agent.workflows import (
     ReviewResponseWorkflowStateStore,
     STATE_WORKFLOW_IDS,
     WorkflowActivation,
+    activation_for_plain_github_pr_url,
     enforce_workflow_tool_policy,
     extract_background_completion_from_message,
     ingest_workflow_background_completion,
@@ -73,6 +74,10 @@ from agent.workflows import (
 
 
 _OPENAI_CLS_CACHE: Optional[type] = None
+_CWD_DIRECTIVE_RE = re.compile(r"^\s*cwd\s*->>\s*(\S+)\s*$", re.IGNORECASE)
+_CWD_QUERY_PATTERNS = (
+    re.compile(r"^\s*where\s+cwd\s*$", re.IGNORECASE),
+)
 
 
 def _load_openai_cls() -> type:
@@ -2244,6 +2249,133 @@ class AIAgent:
             data = dict(activation)
         self.workflow_context = dict(data)
         self._ensure_workflow_state_loaded(save_if_new=bool(getattr(self, "session_id", "")))
+
+    def _resolve_cwd_directive_path(self, text: Any) -> Optional[str]:
+        """Resolve ``cwd ->> <path>`` directives to an existing directory."""
+
+        if not isinstance(text, str):
+            return None
+        match = _CWD_DIRECTIVE_RE.fullmatch(text)
+        if not match:
+            return None
+        raw_path = match.group(1).strip()
+        if not raw_path:
+            return None
+        base_dir = Path(os.getenv("TERMINAL_CWD", os.getcwd())).expanduser()
+        candidate = Path(raw_path).expanduser()
+        if not candidate.is_absolute():
+            candidate = base_dir / candidate
+        try:
+            resolved = candidate.resolve()
+        except OSError:
+            return None
+        if not resolved.exists() or not resolved.is_dir():
+            return None
+        return str(resolved)
+
+    def _is_cwd_query_text(self, text: Any) -> bool:
+        if not isinstance(text, str):
+            return False
+        return any(pattern.fullmatch(text) for pattern in _CWD_QUERY_PATTERNS)
+
+    def _current_effective_cwd(self, conversation_history: Optional[List[Dict[str, Any]]]) -> str:
+        if self._gateway_session_key:
+            return os.getenv("TERMINAL_CWD", os.getcwd())
+        restored = self._apply_session_cwd_from_messages(None, conversation_history)
+        if restored:
+            return restored
+        return os.getenv("TERMINAL_CWD", os.getcwd())
+
+    def _session_cwd_from_history(
+        self,
+        user_message: Any,
+        conversation_history: Optional[List[Dict[str, Any]]],
+    ) -> Optional[str]:
+        """Return the effective session cwd from the current turn or prior history."""
+
+        current = self._resolve_cwd_directive_path(user_message)
+        if current:
+            return current
+        for message in reversed(conversation_history or []):
+            if not isinstance(message, dict) or message.get("role") != "user":
+                continue
+            previous = self._resolve_cwd_directive_path(message.get("content"))
+            if previous:
+                return previous
+        return None
+
+    def _apply_session_cwd_from_messages(
+        self,
+        user_message: Any,
+        conversation_history: Optional[List[Dict[str, Any]]],
+    ) -> Optional[str]:
+        """Apply the effective session cwd derived from directive messages."""
+
+        if getattr(self, "_gateway_session_key", None) and self._resolve_cwd_directive_path(user_message) is None:
+            return None
+        resolved = self._session_cwd_from_history(user_message, conversation_history)
+        if not resolved:
+            return None
+        os.environ["TERMINAL_CWD"] = resolved
+        self._subdirectory_hints = SubdirectoryHintTracker(working_dir=resolved)
+        return resolved
+
+    def _auto_activate_targeted_workflow_for_input(self, user_message: Any) -> None:
+        """Attach deterministic workflow context for narrowly recognized inputs."""
+
+        if self._active_workflow_id():
+            return
+        activation = activation_for_plain_github_pr_url(
+            user_message if isinstance(user_message, str) else None
+        )
+        if activation is not None:
+            self.activate_workflow(activation)
+
+    def _handle_cwd_directive_turn(
+        self,
+        user_message: Any,
+        messages: List[Dict[str, Any]],
+        conversation_history: Optional[List[Dict[str, Any]]],
+    ) -> Optional[Dict[str, Any]]:
+        """Apply and acknowledge a valid ``cwd ->>`` directive turn."""
+
+        resolved = self._resolve_cwd_directive_path(user_message)
+        if not resolved:
+            return None
+        self._apply_session_cwd_from_messages(user_message, conversation_history)
+        final_response = f"Working directory changed to {resolved}"
+        messages.append({"role": "assistant", "content": final_response})
+        self._persist_session(messages, conversation_history or [])
+        return {
+            "final_response": final_response,
+            "messages": messages,
+            "api_calls": 0,
+            "completed": True,
+            "model": self.model,
+            "cwd_changed_to": resolved,
+        }
+
+    def _handle_cwd_query_turn(
+        self,
+        user_message: Any,
+        messages: List[Dict[str, Any]],
+        conversation_history: Optional[List[Dict[str, Any]]],
+    ) -> Optional[Dict[str, Any]]:
+        """Answer exact cwd queries from authoritative session cwd state."""
+
+        if not self._is_cwd_query_text(user_message):
+            return None
+        resolved = self._current_effective_cwd(conversation_history)
+        final_response = f"Current working directory is {resolved}"
+        messages.append({"role": "assistant", "content": final_response})
+        self._persist_session(messages, conversation_history or [])
+        return {
+            "final_response": final_response,
+            "messages": messages,
+            "api_calls": 0,
+            "completed": True,
+            "model": self.model,
+        }
 
     def _active_workflow_id(self) -> Optional[str]:
         context = getattr(self, "workflow_context", None)
@@ -11067,6 +11199,7 @@ class AIAgent:
             user_message = _sanitize_surrogates(user_message)
         if isinstance(persist_user_message, str):
             persist_user_message = _sanitize_surrogates(persist_user_message)
+        self._apply_session_cwd_from_messages(user_message, conversation_history)
 
         # Store stream callback for _interruptible_api_call to pick up
         self._stream_callback = stream_callback
@@ -11095,6 +11228,7 @@ class AIAgent:
         self._unicode_sanitization_passes = 0
         self._tool_guardrails.reset_for_turn()
         self._tool_guardrail_halt_decision = None
+        self._auto_activate_targeted_workflow_for_input(user_message)
         self._ensure_workflow_state_loaded(save_if_new=False)
         self._ingest_workflow_background_completion_message(user_message)
 
@@ -11177,6 +11311,22 @@ class AIAgent:
         messages.append(user_msg)
         current_turn_user_idx = len(messages) - 1
         self._persist_user_message_idx = current_turn_user_idx
+
+        cwd_directive_result = self._handle_cwd_directive_turn(
+            user_message,
+            messages,
+            conversation_history,
+        )
+        if cwd_directive_result is not None:
+            return cwd_directive_result
+
+        cwd_query_result = self._handle_cwd_query_turn(
+            user_message,
+            messages,
+            conversation_history,
+        )
+        if cwd_query_result is not None:
+            return cwd_query_result
         
         if not self.quiet_mode:
             _print_preview = _summarize_user_message_for_log(user_message)

@@ -1,5 +1,7 @@
 """Regression tests for sudo detection and sudo password handling."""
 
+import json
+
 import tools.terminal_tool as terminal_tool
 
 
@@ -168,3 +170,56 @@ def test_validate_workdir_blocks_shell_metacharacters_in_windows_paths():
     assert terminal_tool._validate_workdir(r"C:\Users\Alice\project; rm -rf /")
     assert terminal_tool._validate_workdir(r"C:\Users\Alice\project$(whoami)")
     assert terminal_tool._validate_workdir("C:\\Users\\Alice\\project\nwhoami")
+
+
+def test_foreground_reused_environment_syncs_cwd_from_terminal_env(monkeypatch):
+    monkeypatch.setenv("TERMINAL_CWD", "/home/snowy/coding")
+
+    class DummyEnv:
+        def __init__(self):
+            self.cwd = "/home/snowy/coding/poolbot"
+            self.calls = []
+
+        def execute(self, command, **kwargs):
+            self.calls.append((command, kwargs, self.cwd))
+            return {"output": self.cwd, "returncode": 0}
+
+    dummy_env = DummyEnv()
+
+    monkeypatch.setattr(terminal_tool, "_get_env_config", lambda: {
+        "env_type": "local",
+        "docker_image": "",
+        "singularity_image": "",
+        "modal_image": "",
+        "daytona_image": "",
+        "cwd": "/home/snowy/coding",
+        "host_cwd": None,
+        "timeout": 180,
+        "local_persistent": False,
+        "container_cpu": 1,
+        "container_memory": 5120,
+        "container_disk": 51200,
+        "container_persistent": True,
+        "docker_mount_cwd_to_workspace": False,
+        "docker_forward_env": [],
+        "docker_env": {},
+        "docker_run_as_host_user": False,
+        "modal_mode": "auto",
+        "vercel_runtime": "",
+        "ssh_host": "",
+        "ssh_user": "",
+        "ssh_port": 22,
+        "ssh_key": "",
+        "ssh_persistent": False,
+        "lifetime_seconds": 300,
+    })
+    monkeypatch.setattr(terminal_tool, "_start_cleanup_thread", lambda: None)
+    monkeypatch.setattr(terminal_tool, "_check_all_guards", lambda *_args, **_kwargs: {"approved": True})
+    monkeypatch.setattr(terminal_tool, "_active_environments", {"default": dummy_env})
+    monkeypatch.setattr(terminal_tool, "_last_activity", {"default": 0})
+
+    result = json.loads(terminal_tool.terminal_tool(command="pwd"))
+
+    assert result["output"] == "/home/snowy/coding"
+    assert dummy_env.cwd == "/home/snowy/coding"
+    assert dummy_env.calls[0][2] == "/home/snowy/coding"

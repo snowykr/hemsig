@@ -67,6 +67,10 @@ _PLATFORM_CONNECT_TIMEOUT_SECS_DEFAULT = 30.0
 # is still classified fresh.  Override via
 # ``config.yaml`` ``agent.gateway_auto_continue_freshness``.
 _AUTO_CONTINUE_FRESHNESS_SECS_DEFAULT = 60 * 60
+_CWD_DIRECTIVE_ONLY_RE = re.compile(r"^\s*cwd\s*->>\s*(\S+)\s*$", re.IGNORECASE)
+_CWD_QUERY_PATTERNS = (
+    re.compile(r"^\s*where\s+cwd\s*$", re.IGNORECASE),
+)
 
 
 # --- Stale-code self-check ------------------------------------------------
@@ -141,6 +145,56 @@ def _coerce_gateway_timestamp(value: Any) -> Optional[float]:
         except ValueError:
             return None
     return None
+
+
+def _is_exact_cwd_directive_text(text: str | None) -> bool:
+    return bool(isinstance(text, str) and _CWD_DIRECTIVE_ONLY_RE.fullmatch(text))
+
+
+def _is_cwd_query_text(text: str | None) -> bool:
+    return bool(isinstance(text, str) and any(pattern.fullmatch(text) for pattern in _CWD_QUERY_PATTERNS))
+
+
+def _is_cwd_control_text(text: str | None) -> bool:
+    return _is_exact_cwd_directive_text(text) or _is_cwd_query_text(text)
+
+
+def _persist_terminal_cwd_default(new_cwd: str) -> bool:
+    """Persist terminal.cwd as the new default working directory."""
+    target = str(new_cwd or "").strip()
+    if not target:
+        return False
+    config_path = _hermes_home / "config.yaml"
+    try:
+        import yaml
+        from hermes_cli.config import save_env_value
+
+        user_config = {}
+        if config_path.exists():
+            with open(config_path, encoding="utf-8") as f:
+                user_config = yaml.safe_load(f) or {}
+        if "terminal" not in user_config or not isinstance(user_config.get("terminal"), dict):
+            user_config["terminal"] = {}
+        user_config["terminal"]["cwd"] = target
+        atomic_yaml_write(config_path, user_config, sort_keys=False)
+        save_env_value("TERMINAL_CWD", target)
+        os.environ["TERMINAL_CWD"] = target
+        return True
+    except Exception as exc:
+        logger.warning("Failed to persist terminal.cwd=%s: %s", target, exc)
+        os.environ["TERMINAL_CWD"] = target
+        return False
+
+
+def _reapply_terminal_cwd_from_config() -> None:
+    """Reassert config.yaml terminal.cwd after runtime env reloads."""
+    cfg = _load_gateway_config()
+    terminal_cfg = cfg.get("terminal", {}) if isinstance(cfg, dict) else {}
+    if not isinstance(terminal_cfg, dict):
+        terminal_cfg = {}
+    raw_cwd = terminal_cfg.get("cwd")
+    if isinstance(raw_cwd, str) and raw_cwd not in ("", ".", "auto", "cwd"):
+        os.environ["TERMINAL_CWD"] = os.path.expanduser(raw_cwd)
 
 
 def _auto_continue_freshness_window() -> float:
@@ -856,6 +910,47 @@ def _format_gateway_process_notification(evt: dict) -> "str | None":
 # adapter for plugin platforms.  Set in GatewayRunner.__init__().
 import weakref as _weakref
 _gateway_runner_ref: _weakref.ref = lambda: None
+
+
+def _gateway_outbound_metadata(
+    source,
+    thread_id: str | None = None,
+    *,
+    mention_user: bool = False,
+) -> dict | None:
+    """Build outbound metadata for gateway sends."""
+    metadata = {}
+    if thread_id:
+        metadata["thread_id"] = thread_id
+    if mention_user and source.platform == Platform.DISCORD and source.user_id:
+        metadata["mention_user_id"] = str(source.user_id)
+    return metadata or None
+
+
+def _prefix_discord_mention(content: str, user_id: str | None) -> str:
+    """Prefix a Discord report/completion message with a user mention."""
+    text = str(content or "")
+    uid = str(user_id or "").strip()
+    if not text.strip() or not uid.isdigit():
+        return text
+    stripped = text.lstrip()
+    if stripped.startswith(f"<@{uid}>") or stripped.startswith(f"<@!{uid}>"):
+        return text
+    return f"<@{uid}> {text}"
+
+
+def _is_targeted_workflow_report(response: str, workflow_activation: Optional[Dict[str, Any]]) -> bool:
+    """Return True for workflow-owned completion/report surfaces that should tag the requester."""
+    text = str(response or "")
+    if not text.strip():
+        return False
+    normalized = text.lstrip()
+    if " review-response complete" in normalized or " workflow step report" in normalized:
+        return True
+    workflow_id = str((workflow_activation or {}).get("workflow_id") or "")
+    if workflow_id == "omx_delegation":
+        return True
+    return False
 
 
 class GatewayRunner:
@@ -5321,6 +5416,8 @@ class GatewayRunner:
         """
         history = history or []
         message_text = event.text or ""
+        if _is_cwd_control_text(message_text):
+            return message_text
         _group_sessions_per_user = getattr(self.config, "group_sessions_per_user", True)
         _thread_sessions_per_user = getattr(self.config, "thread_sessions_per_user", False)
         # Use the same helper every other call site uses so the write key here
@@ -6164,6 +6261,10 @@ class GatewayRunner:
                         "Try again or use /reset to start a fresh session."
                     )
 
+            _cwd_changed_to = str(agent_result.get("cwd_changed_to") or "").strip()
+            if _cwd_changed_to:
+                _persist_terminal_cwd_default(_cwd_changed_to)
+
             # If the agent's session_id changed during compression, update
             # session_entry so transcript writes below go to the right session.
             if agent_result.get("session_id") and agent_result["session_id"] != session_entry.session_id:
@@ -6191,6 +6292,16 @@ class GatewayRunner:
                     else:
                         display_reasoning = last_reasoning.strip()
                     response = f"💭 **Reasoning:**\n```\n{display_reasoning}\n```\n\n{response}"
+
+            if (
+                source.platform == Platform.DISCORD
+                and _is_targeted_workflow_report(
+                    response,
+                    getattr(event, "workflow_activation", None),
+                )
+            ):
+                _mention_uid = source.user_id or os.getenv("DISCORD_MENTION_USER_ID", "")
+                response = _prefix_discord_mention(response, _mention_uid)
 
             # Runtime-metadata footer — only on the FINAL message of the turn.
             # Off by default (display.runtime_footer.enabled=false).  When
@@ -8436,7 +8547,11 @@ class GatewayRunner:
             logger.warning("No adapter for platform %s in background task %s", source.platform, task_id)
             return
 
-        _thread_metadata = {"thread_id": source.thread_id} if source.thread_id else None
+        fallback_mention_user = source.user_id or os.getenv("DISCORD_MENTION_USER_ID", "")
+        _thread_metadata = _gateway_outbound_metadata(source, source.thread_id, mention_user=True)
+        if not (_thread_metadata and _thread_metadata.get("mention_user_id")) and fallback_mention_user:
+            _thread_metadata = dict(_thread_metadata or {})
+            _thread_metadata["mention_user_id"] = str(fallback_mention_user)
 
         try:
             user_config = _load_gateway_config()
@@ -11891,7 +12006,7 @@ class GatewayRunner:
             _progress_thread_id = source.thread_id or event_message_id
         else:
             _progress_thread_id = source.thread_id
-        _progress_metadata = {"thread_id": _progress_thread_id} if _progress_thread_id else None
+            _progress_metadata = _gateway_outbound_metadata(source, _progress_thread_id, mention_user=False)
 
         async def send_progress_messages():
             if not progress_queue:
@@ -12113,7 +12228,8 @@ class GatewayRunner:
         # Bridge sync status_callback → async adapter.send for context pressure
         _status_adapter = self.adapters.get(source.platform)
         _status_chat_id = source.chat_id
-        _status_thread_metadata = {"thread_id": _progress_thread_id} if _progress_thread_id else None
+        _status_thread_metadata = _gateway_outbound_metadata(source, _progress_thread_id, mention_user=True)
+        _plain_thread_metadata = _gateway_outbound_metadata(source, _progress_thread_id, mention_user=False)
 
         def _status_callback_sync(event_type: str, message: str) -> None:
             if not _status_adapter or not _run_still_current():
@@ -12167,6 +12283,7 @@ class GatewayRunner:
                 load_dotenv(_env_path, override=True, encoding="latin-1")
             except Exception:
                 pass
+            _reapply_terminal_cwd_from_config()
 
             try:
                 model, runtime_kwargs = self._resolve_session_agent_runtime(
@@ -12257,7 +12374,7 @@ class GatewayRunner:
                             adapter=_adapter,
                             chat_id=source.chat_id,
                             config=_consumer_cfg,
-                            metadata={"thread_id": _progress_thread_id} if _progress_thread_id else None,
+                            metadata=_plain_thread_metadata,
                             on_new_message=(
                                 (lambda: progress_queue.put(("__reset__",)))
                                 if progress_queue is not None
@@ -12543,7 +12660,7 @@ class GatewayRunner:
                                 command=cmd,
                                 session_key=_approval_session_key,
                                 description=desc,
-                                metadata=_status_thread_metadata,
+                                metadata=_plain_thread_metadata,
                             ),
                             _loop_for_step,
                         ).result(timeout=15)
@@ -12580,9 +12697,10 @@ class GatewayRunner:
                     logger.error("Failed to send approval request: %s", _e)
 
             # Prepend pending model switch note so the model knows about the switch
+            _is_cwd_control_turn = _is_cwd_control_text(message if isinstance(message, str) else None)
             _pending_notes = getattr(self, '_pending_model_notes', {})
             _msn = _pending_notes.pop(session_key, None) if session_key else None
-            if _msn:
+            if _msn and not _is_cwd_control_turn:
                 message = _msn + "\n\n" + message
 
             # Auto-continue: if the loaded history ends with a tool result,
@@ -12630,7 +12748,7 @@ class GatewayRunner:
                 and _interruption_is_fresh
             )
 
-            if _is_resume_pending:
+            if _is_resume_pending and not _is_cwd_control_turn:
                 _reason = getattr(_resume_entry, "resume_reason", None) or "restart_timeout"
                 _reason_phrase = (
                     "a gateway restart"
@@ -12647,7 +12765,7 @@ class GatewayRunner:
                     f"message below.]\n\n"
                     + message
                 )
-            elif _has_fresh_tool_tail:
+            elif _has_fresh_tool_tail and not _is_cwd_control_turn:
                 message = (
                     "[System note: Your previous turn was interrupted before you could "
                     "process the last tool result(s). The conversation history contains "
@@ -12665,7 +12783,7 @@ class GatewayRunner:
             _pending_notes = getattr(self, "_pending_skills_reload_notes", None)
             if _pending_notes and session_key and session_key in _pending_notes:
                 _srn = _pending_notes.pop(session_key, None)
-                if _srn:
+                if _srn and not _is_cwd_control_turn:
                     message = _srn + "\n\n" + message
 
             _approval_session_key = session_key or ""
@@ -12744,6 +12862,7 @@ class GatewayRunner:
                     "output_tokens": _output_toks,
                     "model": _resolved_model,
                     "context_length": _context_length,
+                    "cwd_changed_to": result.get("cwd_changed_to"),
                 }
             
             # Scan tool results for MEDIA:<path> tags that need to be delivered
@@ -12851,6 +12970,7 @@ class GatewayRunner:
                 "context_length": _context_length,
                 "session_id": effective_session_id,
                 "response_previewed": result.get("response_previewed", False),
+                "cwd_changed_to": result.get("cwd_changed_to"),
             }
         
         # Start progress message sender if enabled

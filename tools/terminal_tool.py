@@ -1998,6 +1998,13 @@ def terminal_tool(
             max_retries = 3
             retry_count = 0
             result = None
+            foreground_cwd = workdir or cwd
+
+            if foreground_cwd and hasattr(env, "cwd") and getattr(env, "cwd", None) != foreground_cwd:
+                try:
+                    env.cwd = foreground_cwd
+                except Exception:
+                    pass
             
             while retry_count <= max_retries:
                 try:
