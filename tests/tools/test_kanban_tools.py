@@ -153,6 +153,14 @@ def test_complete_rejects_non_dict_metadata(worker_env):
     assert json.loads(out).get("error")
 
 
+def test_complete_schema_exposes_created_cards():
+    from tools.kanban_tools import KANBAN_COMPLETE_SCHEMA
+
+    props = KANBAN_COMPLETE_SCHEMA["parameters"]["properties"]
+    assert "created_cards" in props
+    assert props["created_cards"]["type"] == "array"
+
+
 def test_block_happy_path(worker_env):
     from tools import kanban_tools as kt
     out = kt._handle_block({"reason": "need clarification"})

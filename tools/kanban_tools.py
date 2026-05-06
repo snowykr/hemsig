@@ -509,6 +509,16 @@ KANBAN_COMPLETE_SCHEMA = {
                     "callers that still set --result on the CLI."
                 ),
             },
+            "created_cards": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": (
+                    "Optional list of task ids this worker created while "
+                    "doing the task. The kernel verifies these ids before "
+                    "accepting the completion so downstream operators can "
+                    "trust the handoff graph."
+                ),
+            },
         },
         "required": [],
     },
