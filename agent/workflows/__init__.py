@@ -1,6 +1,10 @@
 """Runtime workflow helpers for targeted Hermes workflows."""
 
-from .activation import WorkflowActivation, activation_for_skill
+from .activation import (
+    WorkflowActivation,
+    activation_for_plain_github_pr_url,
+    activation_for_skill,
+)
 from .omx_delegation_prompt_builder import (
     InlineDelegationPrompt,
     WorkflowDelegationPhase,
@@ -49,6 +53,7 @@ __all__ = [
     "WorkflowDelegationPromptRequest",
     "WorkflowPromptBuildError",
     "WorkflowToolPolicyResult",
+    "activation_for_plain_github_pr_url",
     "activation_for_skill",
     "build_review_response_delegation_prompt",
     "build_review_response_delegation_prompt_or_abort",

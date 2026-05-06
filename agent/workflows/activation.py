@@ -39,6 +39,10 @@ _TARGETED_SKILL_WORKFLOWS: Mapping[str, WorkflowActivation] = {
 
 _INVALID_SKILL_CHARS = re.compile(r"[^a-z0-9-]")
 _MULTI_HYPHEN = re.compile(r"-{2,}")
+_GITHUB_PR_URL_ONLY = re.compile(
+    r"^https://github\.com/[^/\s]+/[^/\s]+/pull/\d+/?$",
+    flags=re.IGNORECASE,
+)
 
 
 def _normalize_skill_name(name: str | None) -> str:
@@ -53,3 +57,12 @@ def activation_for_skill(skill_name: str | None) -> WorkflowActivation | None:
 
     normalized = _normalize_skill_name(skill_name)
     return _TARGETED_SKILL_WORKFLOWS.get(normalized)
+
+
+def activation_for_plain_github_pr_url(text: str | None) -> WorkflowActivation | None:
+    """Return review-response activation for a bare GitHub PR URL input."""
+
+    candidate = str(text or "").strip()
+    if not candidate or not _GITHUB_PR_URL_ONLY.fullmatch(candidate):
+        return None
+    return _TARGETED_SKILL_WORKFLOWS["github-pr-review-response"]

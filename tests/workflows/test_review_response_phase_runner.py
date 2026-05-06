@@ -691,6 +691,60 @@ def test_run_conversation_invokes_runner_after_activation(monkeypatch) -> None:
     assert agent.workflow_state.phase == ReviewResponsePhase.PR_ANALYSIS.value
 
 
+def test_run_conversation_auto_activates_for_plain_pr_url(monkeypatch) -> None:
+    from run_agent import AIAgent
+
+    agent = AIAgent(
+        api_key="test-key",
+        base_url="https://example.test/v1",
+        provider="openai",
+        model="gpt-test",
+        enabled_toolsets=["terminal"],
+        skip_memory=True,
+        skip_context_files=True,
+        quiet_mode=True,
+        max_iterations=5,
+    )
+
+    executed_actions: list[str] = []
+
+    def fake_execute(action, messages, effective_task_id):
+        del effective_task_id
+        action_name = str(action.action_type)
+        executed_actions.append(action_name)
+        if action_name.endswith("duplicate_session_check"):
+            payload = {"output": 'WORKFLOW_GUARD_RESULT={"guard":"duplicate_session","duplicate_session_active":false}'}
+        elif action_name.endswith("actionable_state_check"):
+            payload = {
+                "output": (
+                    'WORKFLOW_GUARD_RESULT={"guard":"actionable_state",'
+                    '"unresolved_review_threads":1,"failing_ci":false,'
+                    '"other_actionable_state":false,"ci_status":"passing",'
+                    '"local_verification":"guard"}'
+                )
+            }
+        else:
+            payload = {"session_id": "proc_runtime_runner", "output": "started"}
+        messages.append({"role": "tool", "tool_call_id": f"fake-{len(executed_actions)}", "content": json.dumps(payload)})
+        return True
+
+    monkeypatch.setattr(agent, "execute_review_response_workflow_action", fake_execute)
+    monkeypatch.setattr(agent, "_sync_external_memory_for_turn", lambda **_kwargs: None)
+    monkeypatch.setattr(agent, "_spawn_background_review", lambda **_kwargs: None)
+
+    result = agent.run_conversation("https://github.com/example/repo/pull/42")
+
+    assert result["final_response"]
+    assert "pr-analysis" in result["final_response"]
+    assert agent.workflow_context is not None
+    assert agent.workflow_context["workflow_id"] == "review_response"
+    assert executed_actions == [
+        "run_duplicate_session_check",
+        "run_actionable_state_check",
+        "delegate_pr_analysis",
+    ]
+
+
 def test_runtime_clean_exit_uses_report_renderer(monkeypatch) -> None:
     from agent.workflows import activation_for_skill
     from run_agent import AIAgent

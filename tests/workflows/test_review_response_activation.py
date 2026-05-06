@@ -72,11 +72,65 @@ def test_target_skill_activates_workflow_context(
 
 def test_non_target_skill_does_not_activate_workflow() -> None:
     from agent.skill_commands import workflow_activation_for_skill_command
-    from agent.workflows import activation_for_skill
+    from agent.workflows import activation_for_plain_github_pr_url, activation_for_skill
 
     assert workflow_activation_for_skill_command("/ordinary-skill") is None
     assert activation_for_skill("ordinary-skill") is None
     assert activation_for_skill("please use github-pr-review-response") is None
+    assert activation_for_plain_github_pr_url("https://github.com/example/repo/issues/42") is None
+    assert activation_for_plain_github_pr_url(
+        "please review https://github.com/example/repo/pull/42"
+    ) is None
+
+
+def test_plain_github_pr_url_activates_review_response() -> None:
+    from agent.workflows import activation_for_plain_github_pr_url
+
+    activation = activation_for_plain_github_pr_url(
+        "https://github.com/example/repo/pull/42"
+    )
+
+    assert activation is not None
+    assert activation.workflow_id == "review_response"
+    assert activation.skill_name == "github-pr-review-response"
+
+
+def test_agent_auto_activates_review_response_for_plain_pr_url() -> None:
+    from run_agent import AIAgent
+
+    agent = object.__new__(AIAgent)
+    agent.workflow_context = None
+    agent.workflow_state = None
+    agent.session_id = ""
+    agent._ensure_workflow_state_loaded = lambda save_if_new=False: None
+
+    agent._auto_activate_targeted_workflow_for_input(
+        "https://github.com/example/repo/pull/42"
+    )
+
+    assert agent.workflow_context is not None
+    assert agent.workflow_context["workflow_id"] == "review_response"
+
+
+def test_agent_does_not_override_existing_workflow_activation() -> None:
+    from agent.workflows import activation_for_skill
+    from run_agent import AIAgent
+
+    agent = object.__new__(AIAgent)
+    agent.workflow_context = None
+    agent.workflow_state = None
+    agent.session_id = ""
+    agent._ensure_workflow_state_loaded = lambda save_if_new=False: None
+    activation = activation_for_skill("omx-delegation")
+
+    assert activation is not None
+    agent.activate_workflow(activation)
+    agent._auto_activate_targeted_workflow_for_input(
+        "https://github.com/example/repo/pull/42"
+    )
+
+    assert agent.workflow_context is not None
+    assert agent.workflow_context["workflow_id"] == "omx_delegation"
 
 
 def test_no_workflow_state_file_for_normal_sessions() -> None:
