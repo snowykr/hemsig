@@ -70,6 +70,7 @@ _AUTO_CONTINUE_FRESHNESS_SECS_DEFAULT = 60 * 60
 _CWD_DIRECTIVE_ONLY_RE = re.compile(r"^\s*(?:cwd|pdir)\s*->>\s*(.*?)\s*$", re.IGNORECASE)
 _CWD_QUERY_PATTERNS = (
     re.compile(r"^\s*where\s+cwd\s*$", re.IGNORECASE),
+    re.compile(r"^\s*where\s+pdir\s*$", re.IGNORECASE),
 )
 
 

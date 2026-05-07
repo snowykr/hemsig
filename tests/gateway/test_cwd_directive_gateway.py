@@ -118,6 +118,36 @@ def test_prepare_inbound_message_text_preserves_exact_where_cwd_query_in_shared_
     assert result == "where cwd"
 
 
+def test_prepare_inbound_message_text_preserves_exact_where_pdir_query_in_shared_thread():
+    runner = object.__new__(GatewayRunner)
+    runner.config = SimpleNamespace(group_sessions_per_user=True, thread_sessions_per_user=False)
+
+    source = SessionSource(
+        platform=Platform.DISCORD,
+        chat_id="123",
+        chat_name="thread",
+        chat_type="thread",
+        user_id="456",
+        user_name="snowy",
+        thread_id="789",
+    )
+    event = MessageEvent(
+        text="where pdir",
+        message_type=MessageType.TEXT,
+        source=source,
+    )
+
+    result = asyncio.run(
+        runner._prepare_inbound_message_text(
+            event=event,
+            source=source,
+            history=[],
+        )
+    )
+
+    assert result == "where pdir"
+
+
 def test_reapply_terminal_cwd_from_config_overrides_stale_env(tmp_path, monkeypatch):
     config_home = tmp_path / ".hermes"
     config_home.mkdir()
