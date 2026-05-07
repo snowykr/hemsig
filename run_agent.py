@@ -79,6 +79,9 @@ _CWD_DIRECTIVE_RE = re.compile(r"^\s*cwd\s*->>\s*(.*?)\s*$", re.IGNORECASE)
 _CWD_QUERY_PATTERNS = (
     re.compile(r"^\s*where\s+cwd\s*$", re.IGNORECASE),
 )
+_PDIR_QUERY_PATTERNS = (
+    re.compile(r"^\s*where\s+pdir\s*$", re.IGNORECASE),
+)
 
 
 def _load_openai_cls() -> type:
@@ -2318,6 +2321,11 @@ class AIAgent:
             return False
         return any(pattern.fullmatch(text) for pattern in _CWD_QUERY_PATTERNS)
 
+    def _is_pdir_query_text(self, text: Any) -> bool:
+        if not isinstance(text, str):
+            return False
+        return any(pattern.fullmatch(text) for pattern in _PDIR_QUERY_PATTERNS)
+
     def _current_effective_cwd(self, conversation_history: Optional[List[Dict[str, Any]]]) -> str:
         if self._gateway_session_key:
             try:
@@ -2329,6 +2337,20 @@ class AIAgent:
         if restored:
             return restored
         return os.getenv("TERMINAL_CWD", os.getcwd())
+
+    def _current_project_dir(self) -> str:
+        if not self._gateway_session_key:
+            return ""
+        try:
+            from gateway.session_context import get_session_env
+
+            project_dir = str(get_session_env("HERMES_SESSION_PROJECT_DIR", "") or "").strip()
+            if not project_dir:
+                return ""
+            expanded = os.path.abspath(os.path.expanduser(project_dir))
+            return expanded if os.path.isdir(expanded) else ""
+        except Exception:
+            return ""
 
     def _session_cwd_from_history(
         self,
@@ -2474,6 +2496,32 @@ class AIAgent:
             return None
         resolved = self._current_effective_cwd(conversation_history)
         final_response = f"Current working directory is {resolved}"
+        messages.append({"role": "assistant", "content": final_response})
+        self._persist_session(messages, conversation_history or [])
+        return {
+            "final_response": final_response,
+            "messages": messages,
+            "api_calls": 0,
+            "completed": True,
+            "model": self.model,
+        }
+
+    def _handle_pdir_query_turn(
+        self,
+        user_message: Any,
+        messages: List[Dict[str, Any]],
+        conversation_history: Optional[List[Dict[str, Any]]],
+    ) -> Optional[Dict[str, Any]]:
+        """Answer exact pdir queries from authoritative session project-dir state."""
+
+        _ = conversation_history
+        if not self._is_pdir_query_text(user_message):
+            return None
+        resolved = self._current_project_dir()
+        if resolved:
+            final_response = f"Current project directory is {resolved}"
+        else:
+            final_response = "Current project directory is not set"
         messages.append({"role": "assistant", "content": final_response})
         self._persist_session(messages, conversation_history or [])
         return {
@@ -11460,6 +11508,14 @@ class AIAgent:
         )
         if cwd_query_result is not None:
             return cwd_query_result
+
+        pdir_query_result = self._handle_pdir_query_turn(
+            user_message,
+            messages,
+            conversation_history,
+        )
+        if pdir_query_result is not None:
+            return pdir_query_result
         
         if not self.quiet_mode:
             _print_preview = _summarize_user_message_for_log(user_message)

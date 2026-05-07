@@ -163,6 +163,102 @@ def test_natural_language_cwd_question_is_not_deterministic_query(monkeypatch, t
 
     assert agent._is_cwd_query_text("지금 cwd 어디야?") is False
     assert agent._is_cwd_query_text("where cwd") is True
+    assert agent._is_pdir_query_text("where pdir") is True
+
+
+def test_gateway_session_where_pdir_returns_project_dir(monkeypatch, tmp_path) -> None:
+    from gateway.session_context import clear_session_vars, set_session_vars
+    from run_agent import AIAgent
+
+    original = tmp_path / "original"
+    project = tmp_path / "project"
+    worktree = project / "subdir"
+    original.mkdir()
+    project.mkdir()
+    worktree.mkdir()
+    monkeypatch.setenv("TERMINAL_CWD", str(original))
+    tokens = set_session_vars(
+        project_dir=str(project),
+        working_dir=str(worktree),
+        effective_cwd=str(worktree),
+    )
+    try:
+        agent = AIAgent(
+            api_key="test-key",
+            base_url="https://example.test/v1",
+            provider="openai",
+            model="gpt-test",
+            skip_memory=True,
+            skip_context_files=True,
+            quiet_mode=True,
+            max_iterations=1,
+            gateway_session_key="agent:main:discord:thread:123:123",
+        )
+
+        result = agent.run_conversation("where pdir")
+    finally:
+        clear_session_vars(tokens)
+
+    assert result["final_response"] == f"Current project directory is {project.resolve()}"
+
+
+def test_gateway_session_where_pdir_reports_unset(monkeypatch, tmp_path) -> None:
+    from gateway.session_context import clear_session_vars, set_session_vars
+    from run_agent import AIAgent
+
+    original = tmp_path / "original"
+    original.mkdir()
+    monkeypatch.setenv("TERMINAL_CWD", str(original))
+    tokens = set_session_vars(working_dir=str(original), effective_cwd=str(original))
+    try:
+        agent = AIAgent(
+            api_key="test-key",
+            base_url="https://example.test/v1",
+            provider="openai",
+            model="gpt-test",
+            skip_memory=True,
+            skip_context_files=True,
+            quiet_mode=True,
+            max_iterations=1,
+            gateway_session_key="agent:main:discord:thread:123:123",
+        )
+
+        result = agent.run_conversation("where pdir")
+    finally:
+        clear_session_vars(tokens)
+
+    assert result["final_response"] == "Current project directory is not set"
+
+
+def test_gateway_session_where_pdir_ignores_deleted_project_dir(monkeypatch, tmp_path) -> None:
+    from gateway.session_context import clear_session_vars, set_session_vars
+    from run_agent import AIAgent
+
+    original = tmp_path / "original"
+    project = tmp_path / "project"
+    original.mkdir()
+    project.mkdir()
+    monkeypatch.setenv("TERMINAL_CWD", str(original))
+    tokens = set_session_vars(project_dir=str(project))
+    project.rmdir()
+    try:
+        agent = AIAgent(
+            api_key="test-key",
+            base_url="https://example.test/v1",
+            provider="openai",
+            model="gpt-test",
+            skip_memory=True,
+            skip_context_files=True,
+            quiet_mode=True,
+            max_iterations=1,
+            gateway_session_key="agent:main:discord:thread:123:123",
+        )
+
+        result = agent.run_conversation("where pdir")
+    finally:
+        clear_session_vars(tokens)
+
+    assert result["final_response"] == "Current project directory is not set"
 
 
 def test_gateway_session_where_cwd_ignores_history_directive(monkeypatch, tmp_path) -> None:
