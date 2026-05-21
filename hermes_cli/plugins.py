@@ -199,7 +199,7 @@ class PluginManifest:
     #              Selection via ``<category>.provider`` config key; the
     #              category's own discovery system handles loading and the
     #              general scanner skips these.
-    # ``platform``: gateway messaging platform adapter (e.g. IRC). Bundled
+    # ``platform``: gateway messaging platform adapter (e.g. a custom chat service). Bundled
     #              platform plugins auto-load so every shipped platform is
     #              available out of the box; user-installed platform plugins
     #              in ~/.hermes/plugins/ still gated by ``plugins.enabled``
@@ -493,12 +493,12 @@ class PluginContext:
         Example::
 
             ctx.register_platform(
-                name="irc",
-                label="IRC",
-                adapter_factory=lambda cfg: IRCAdapter(cfg),
+                name="customchat",
+                label="Custom Chat",
+                adapter_factory=lambda cfg: CustomChatAdapter(cfg),
                 check_fn=lambda: True,
                 emoji="💬",
-                setup_fn=irc_interactive_setup,
+                setup_fn=customchat_interactive_setup,
             )
         """
         from gateway.platform_registry import platform_registry, PlatformEntry
@@ -714,7 +714,7 @@ class PluginManager:
             # services calls) is driven by ``<category>.provider`` config,
             # enforced by the tool wrapper.
             #
-            # Bundled platform plugins (gateway adapters like IRC) auto-load
+            # Bundled platform plugins (gateway adapters like a custom chat service) auto-load
             # for the same reason: every platform Hermes ships must be
             # available out of the box without the user having to opt in.
             if manifest.source == "bundled" and manifest.kind in ("backend", "platform"):

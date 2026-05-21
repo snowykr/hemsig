@@ -23,7 +23,17 @@ export const asCommandDispatch = (value: unknown): CommandDispatchResponse | nul
   }
 
   if (t === 'skill' && typeof o.name === 'string') {
-    return { type: 'skill', name: o.name, message: typeof o.message === 'string' ? o.message : undefined }
+    const workflowActivation =
+      o.workflow_activation && typeof o.workflow_activation === 'object' && !Array.isArray(o.workflow_activation)
+        ? o.workflow_activation
+        : undefined
+
+    return {
+      type: 'skill',
+      name: o.name,
+      message: typeof o.message === 'string' ? o.message : undefined,
+      workflow_activation: workflowActivation
+    }
   }
 
   if (t === 'send' && typeof o.message === 'string') {

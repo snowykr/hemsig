@@ -35,7 +35,7 @@ _EXCLUDED_DIRS = {
     "hermes-agent",     # the codebase repo — re-clone instead
     "__pycache__",      # bytecode caches — regenerated on import
     ".git",             # nested git dirs (profiles shouldn't have these, but safety)
-    "node_modules",     # js deps if website/ somehow leaks in
+    "node_modules",     # JS dependencies are regenerated on install
     "backups",          # prior auto-backups — don't nest backups exponentially
     "checkpoints",      # session-local trajectory caches — regenerated per-session,
                         # session-hash-keyed so they don't port to another machine anyway
@@ -483,7 +483,6 @@ _QUICK_STATE_FILES = (
     # Pairing stores (generic + per-platform JSONs outside state.db)
     "pairing",                          # legacy location (gateway/pairing.py)
     "platforms/pairing",                # new location (gateway/pairing.py)
-    "feishu_comment_pairing.json",      # Feishu comment subscription pairings
 )
 
 _QUICK_SNAPSHOTS_DIR = "state-snapshots"

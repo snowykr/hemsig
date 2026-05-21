@@ -53,7 +53,7 @@ AUTHOR_MAP = {
     "14046872+tmimmanuel@users.noreply.github.com": "tmimmanuel",
     "657290301@qq.com": "IMHaoyan",
     "revar@users.noreply.github.com": "revaraver",
-    # Matrix parity salvage batch (April 2026)
+    # Gateway parity salvage batch (April 2026)
     "sr@samirusani": "samrusani",
     "angelclaw@AngelMacBook.local": "angel12",
     "charles@cryptoassetrecovery.com": "charles-brooks",

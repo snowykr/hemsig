@@ -95,7 +95,7 @@ QWEN_ACCESS_TOKEN_REFRESH_SKEW_SECONDS = 120
 DEFAULT_SPOTIFY_ACCOUNTS_BASE_URL = "https://accounts.spotify.com"
 DEFAULT_SPOTIFY_API_BASE_URL = "https://api.spotify.com/v1"
 DEFAULT_SPOTIFY_REDIRECT_URI = "http://127.0.0.1:43827/spotify/callback"
-SPOTIFY_DOCS_URL = "https://hermes-agent.nousresearch.com/docs/user-guide/features/spotify"
+SPOTIFY_HELP_TEXT = "hermes spotify --help"
 SPOTIFY_DASHBOARD_URL = "https://developer.spotify.com/dashboard"
 SPOTIFY_ACCESS_TOKEN_REFRESH_SKEW_SECONDS = 120
 DEFAULT_SPOTIFY_SCOPE = " ".join((
@@ -2028,7 +2028,7 @@ def _spotify_interactive_setup(redirect_uri_hint: str) -> str:
     print("developer app. This takes about two minutes and only has to be")
     print("done once per machine.")
     print()
-    print(f"Full guide: {SPOTIFY_DOCS_URL}")
+    print(f"Help: {SPOTIFY_HELP_TEXT}")
     print()
     print("Steps:")
     print(f"  1. Opening {SPOTIFY_DASHBOARD_URL} in your browser...")
@@ -2056,7 +2056,7 @@ def _spotify_interactive_setup(redirect_uri_hint: str) -> str:
 
     if not raw:
         print()
-        print(f"No Client ID entered. See {SPOTIFY_DOCS_URL} for the full guide.")
+        print(f"No Client ID entered. Run `{SPOTIFY_HELP_TEXT}` for setup help.")
         raise SystemExit("Spotify setup cancelled: empty Client ID.")
 
     # Persist so subsequent `hermes auth spotify` runs skip the wizard.
@@ -2114,7 +2114,7 @@ def login_spotify_command(args) -> None:
     print("Open this URL to authorize Hermes:")
     print(authorize_url)
     print()
-    print(f"Full setup guide: {SPOTIFY_DOCS_URL}")
+    print(f"Setup help: {SPOTIFY_HELP_TEXT}")
     print()
 
     if open_browser and not _is_remote_session():
@@ -2162,7 +2162,7 @@ def login_spotify_command(args) -> None:
     print("Spotify login successful!")
     print(f"  Auth state: {saved_to}")
     print("  Provider state saved under providers.spotify")
-    print(f"  Docs: {SPOTIFY_DOCS_URL}")
+    print(f"  Help: {SPOTIFY_HELP_TEXT}")
 
 # =============================================================================
 # SSH / remote session detection
@@ -2459,7 +2459,7 @@ def _default_verify() -> bool | ssl.SSLContext:
     system trust store and valid public certs fail verification. When
     certifi is importable we pin its bundle explicitly; elsewhere we
     defer to httpx's built-in default (certifi via its own dependency).
-    Mirrors the weixin fix in 3a0ec1d93.
+    Mirrors the provider refresh fix in 3a0ec1d93.
     """
     if sys.platform == "darwin":
         try:

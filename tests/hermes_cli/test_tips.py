@@ -32,6 +32,18 @@ class TestTipsCorpus:
         for i, tip in enumerate(TIPS):
             assert tip == tip.strip(), f"Tip {i} has leading/trailing whitespace"
 
+    def test_cron_delivery_tip_matches_supported_targets(self):
+        expected = (
+            "Cron delivery targets include telegram, discord, slack, signal, email, "
+            "and homeassistant."
+        )
+        assert expected in TIPS
+        assert all(
+            "Cron delivery targets include telegram, discord, slack, signal, email, homeassistant, webhook, and api_server."
+            != tip
+            for tip in TIPS
+        )
+
 
 class TestGetRandomTip:
     """Validate the get_random_tip() function."""

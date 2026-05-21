@@ -546,7 +546,7 @@ class EmailAdapter(BasePlatformAdapter):
         images: List[Tuple[str, str]],
         metadata: Optional[Dict[str, Any]] = None,
         human_delay: float = 0.0,
-    ) -> None:
+    ) -> Optional[SendResult]:
         """Send a batch of images as a single email with multiple MIME attachments.
 
         Local files are attached directly. URL images have their URL
@@ -555,7 +555,7 @@ class EmailAdapter(BasePlatformAdapter):
         attachments fine, subject to SMTP message size limits.
         """
         if not images:
-            return
+            return SendResult(success=True)
 
         from urllib.parse import unquote as _unquote
 
@@ -575,7 +575,7 @@ class EmailAdapter(BasePlatformAdapter):
                 body_parts.append(f"Image: {image_url}")
 
         if not local_paths and not body_parts:
-            return
+            return SendResult(success=True)
 
         body = "\n\n".join(body_parts)
 
@@ -590,7 +590,8 @@ class EmailAdapter(BasePlatformAdapter):
             )
         except Exception as e:
             logger.error("[Email] Multi-image send failed, falling back: %s", e, exc_info=True)
-            await super().send_multiple_images(chat_id, images, metadata, human_delay)
+            return await super().send_multiple_images(chat_id, images, metadata, human_delay)
+        return SendResult(success=True)
 
     def _send_email_with_attachments(
         self,

@@ -58,7 +58,7 @@ If your skill is specialized, community-contributed, or niche, it's better suite
 | **Git** | With `--recurse-submodules` support, and the `git-lfs` extension installed |
 | **Python 3.11+** | uv will install it if missing |
 | **uv** | Fast Python package manager ([install](https://docs.astral.sh/uv/)) |
-| **Node.js 20+** | Optional — needed for browser tools and WhatsApp bridge (matches root `package.json` engines) |
+| **Node.js 20+** | Optional — needed for browser tools (matches root `package.json` engines) |
 
 ### Clone and install
 
@@ -164,19 +164,16 @@ hermes-agent/
 │   ├── config.py                 # Platform configuration resolution
 │   ├── session.py                # Session store, context prompts, reset policies
 │   └── platforms/                # Platform adapters
-│       ├── telegram.py, discord_adapter.py, slack.py, whatsapp.py
+│       ├── telegram.py, discord.py, slack.py, signal.py, ...
 │
-├── scripts/                  # Installer and bridge scripts
+├── scripts/                  # Installer and auxiliary scripts
 │   ├── install.sh                # Linux/macOS installer
 │   ├── install.ps1               # Windows PowerShell installer
-│   └── whatsapp-bridge/          # Node.js WhatsApp bridge (Baileys)
 │
 ├── skills/                   # Bundled skills (copied to ~/.hermes/skills/ on install)
 ├── optional-skills/          # Official optional skills (discoverable via hub, not activated by default)
 ├── environments/             # RL training environments (Atropos integration)
 ├── tests/                    # Test suite
-├── website/                  # Documentation site (hermes-agent.nousresearch.com)
-│
 ├── cli-config.yaml.example   # Example configuration (copied to ~/.hermes/config.yaml)
 └── AGENTS.md                 # Development guide for AI coding assistants
 ```
@@ -193,7 +190,6 @@ hermes-agent/
 | `~/.hermes/state.db` | SQLite session database |
 | `~/.hermes/sessions/` | JSON session logs |
 | `~/.hermes/cron/` | Scheduled job data |
-| `~/.hermes/whatsapp/session/` | WhatsApp bridge credentials |
 
 ---
 
@@ -625,12 +621,12 @@ We use [Conventional Commits](https://www.conventionalcommits.org/):
 | `refactor` | Code restructuring (no behavior change) |
 | `chore` | Build, CI, dependency updates |
 
-Scopes: `cli`, `gateway`, `tools`, `skills`, `agent`, `install`, `whatsapp`, `security`, etc.
+Scopes: `cli`, `gateway`, `tools`, `skills`, `agent`, `install`, `security`, etc.
 
 Examples:
 ```
 fix(cli): prevent crash in save_config_value when model is a string
-feat(gateway): add WhatsApp multi-user session isolation
+feat(gateway): add Signal multi-user session isolation
 fix(security): prevent shell injection in sudo password piping
 test(tools): add unit tests for file_operations
 ```

@@ -6223,7 +6223,11 @@ class HermesCLI:
                 Platform.TELEGRAM: ("Telegram", "TELEGRAM_BOT_TOKEN"),
                 Platform.DISCORD: ("Discord", "DISCORD_BOT_TOKEN"),
                 Platform.SLACK: ("Slack", "SLACK_BOT_TOKEN"),
-                Platform.WHATSAPP: ("WhatsApp", "WHATSAPP_ENABLED"),
+                Platform.SIGNAL: ("Signal", "SIGNAL_HTTP_URL / SIGNAL_ACCOUNT"),
+                Platform.EMAIL: ("Email", "EMAIL_ADDRESS / EMAIL_IMAP_HOST / EMAIL_SMTP_HOST"),
+                Platform.HOMEASSISTANT: ("Home Assistant", "HASS_URL / HASS_TOKEN"),
+                Platform.WEBHOOK: ("Webhooks", "WEBHOOK_ENABLED"),
+                Platform.API_SERVER: ("API Server", "API_SERVER_ENABLED"),
             }
             
             for platform, (name, env_var) in platform_status.items():

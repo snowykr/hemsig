@@ -57,8 +57,8 @@ fi
 # --- Running as hermes from here ---
 source "${INSTALL_DIR}/.venv/bin/activate"
 
-# Create essential directory structure.  Cache and platform directories
-# (cache/images, cache/audio, platforms/whatsapp, etc.) are created on
+# Create essential directory structure. Cache and platform directories
+# (cache/images, cache/audio, adapter-specific state, etc.) are created on
 # demand by the application — don't pre-create them here so new installs
 # get the consolidated layout from get_hermes_dir().
 # The "home/" subdirectory is a per-profile HOME for subprocesses (git,

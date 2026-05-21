@@ -15,6 +15,7 @@ import type {
   TerminalResizeResponse
 } from '../gatewayTypes.js'
 import { useGitBranch } from '../hooks/useGitBranch.js'
+import { findDrainableQueuedSubmissionIndex, shouldDrainQueuedSubmission } from '../hooks/useQueue.js'
 import { useVirtualHistory } from '../hooks/useVirtualHistory.js'
 import { appendTranscriptMessage } from '../lib/messages.js'
 import { isMac } from '../lib/platform.js'
@@ -27,7 +28,7 @@ import type { Msg, PanelSection, SlashCatalog } from '../types.js'
 import { createGatewayEventHandler } from './createGatewayEventHandler.js'
 import { createSlashHandler } from './createSlashHandler.js'
 import { getInputSelection } from './inputSelectionStore.js'
-import { type GatewayRpc, type TranscriptRow } from './interfaces.js'
+import { type GatewayRpc, type QueuedSubmission, type TranscriptRow } from './interfaces.js'
 import { $overlayState, patchOverlayState } from './overlayStore.js'
 import { scrollWithSelectionBy } from './scroll.js'
 import { turnController } from './turnController.js'
@@ -68,6 +69,8 @@ const statusColorOf = (status: string, t: { error: string; muted: string; ok: st
 
   return t.muted
 }
+
+export { findDrainableQueuedSubmissionIndex, shouldDrainQueuedSubmission }
 
 export function useMainApp(gw: GatewayClient) {
   const { exit } = useApp()
@@ -506,12 +509,22 @@ export function useMainApp(gw: GatewayClient) {
       return
     }
 
-    const next = composerActions.dequeue()
+    const nextIndex = findDrainableQueuedSubmissionIndex(composerRefs.queueRef.current, ui.sid)
 
-    if (next) {
-      patchUiState({ busy: true, status: 'running…' })
-      sendQueued(next)
+    if (nextIndex < 0) {
+      return
     }
+
+    const dequeued = composerRefs.queueRef.current[nextIndex]
+
+    if (!dequeued) {
+      return
+    }
+
+    composerActions.removeQueue(nextIndex)
+
+    patchUiState({ busy: true, status: 'running…' })
+    sendQueued(dequeued)
   }, [ui.sid, ui.busy, composerActions, composerRefs, sendQueued])
 
   const { pagerPageSize } = useInputHandlers({

@@ -185,13 +185,6 @@ class TestPlatformDefaults:
         for plat in ("telegram", "discord"):
             assert resolve_display_setting({}, plat, "tool_progress") == "all", plat
 
-    def test_medium_tier_platforms(self):
-        """Mattermost, Matrix, Feishu, WhatsApp default to 'new' tool progress."""
-        from gateway.display_config import resolve_display_setting
-
-        for plat in ("mattermost", "matrix", "feishu", "whatsapp"):
-            assert resolve_display_setting({}, plat, "tool_progress") == "new", plat
-
     def test_slack_defaults_tool_progress_off(self):
         """Slack defaults to quiet tool progress (permanent chat noise otherwise)."""
         from gateway.display_config import resolve_display_setting
@@ -199,17 +192,16 @@ class TestPlatformDefaults:
         assert resolve_display_setting({}, "slack", "tool_progress") == "off"
 
     def test_low_tier_platforms(self):
-        """Signal, BlueBubbles, etc. default to 'off' tool progress."""
+        """Signal defaults to 'off' tool progress."""
         from gateway.display_config import resolve_display_setting
 
-        for plat in ("signal", "bluebubbles", "weixin", "wecom", "dingtalk"):
-            assert resolve_display_setting({}, plat, "tool_progress") == "off", plat
+        assert resolve_display_setting({}, "signal", "tool_progress") == "off"
 
     def test_minimal_tier_platforms(self):
-        """Email, SMS, webhook default to 'off' tool progress."""
+        """Email, webhook, and Home Assistant default to 'off' tool progress."""
         from gateway.display_config import resolve_display_setting
 
-        for plat in ("email", "sms", "webhook", "homeassistant"):
+        for plat in ("email", "webhook", "homeassistant"):
             assert resolve_display_setting({}, plat, "tool_progress") == "off", plat
 
     def test_low_tier_streaming_defaults_to_false(self):

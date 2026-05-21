@@ -471,17 +471,17 @@ class TestGetSectionConfigSummary:
             )
         assert result == "MiniMax-M1"
 
-    def test_gateway_recognises_whatsapp_enabled(self):
-        """WhatsApp uses WHATSAPP_ENABLED (not WHATSAPP_PHONE_NUMBER_ID)."""
+    def test_gateway_recognises_webhook_enabled(self):
+        """Webhook uses WEBHOOK_ENABLED."""
         def env_side(key):
-            return "true" if key == "WHATSAPP_ENABLED" else ""
+            return "true" if key == "WEBHOOK_ENABLED" else ""
 
         import hermes_cli.gateway as gateway_mod
         with patch.object(setup_mod, "get_env_value", side_effect=env_side), \
              patch.object(gateway_mod, "get_env_value", side_effect=env_side):
             result = setup_mod._get_section_config_summary({}, "gateway")
         assert result is not None
-        assert "WhatsApp" in result
+        assert "Webhook" in result
 
     def test_gateway_recognises_signal_http_url(self):
         """Signal uses SIGNAL_HTTP_URL (not SIGNAL_ACCOUNT)."""
@@ -548,14 +548,11 @@ class TestGetSectionConfigSummary:
             env_var = plat.get("token_var")
             if not env_var:
                 continue
-            # Some platforms require a specific value shape (e.g. WhatsApp
-            # needs the literal "true"). Use a sentinel that satisfies every
-            # real validator _platform_status() currently checks.
+            # Use a sentinel that satisfies every real validator
+            # _platform_status() currently checks.
             def env_side(key, _target=env_var):
                 if key != _target:
                     return ""
-                if _target == "WHATSAPP_ENABLED":
-                    return "true"
                 return "x"
             import hermes_cli.gateway as gateway_mod
             with patch.object(setup_mod, "get_env_value", side_effect=env_side), \

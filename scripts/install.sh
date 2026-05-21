@@ -943,7 +943,7 @@ install_deps() {
         fi
 
         log_success "Main package installed"
-        log_info "Termux note: browser/WhatsApp tooling is not installed by default; see the Termux guide for optional follow-up steps."
+        log_info "Termux note: browser tooling is not installed by default; see the Termux guide for optional follow-up steps."
 
         if [ -d "tinker-atropos" ] && [ -f "tinker-atropos/pyproject.toml" ]; then
             log_info "tinker-atropos submodule found — skipping install (optional, for RL training)"
@@ -1366,7 +1366,7 @@ maybe_start_gateway() {
     fi
 
     HAS_MESSAGING=false
-    for VAR in TELEGRAM_BOT_TOKEN DISCORD_BOT_TOKEN SLACK_BOT_TOKEN SLACK_APP_TOKEN WHATSAPP_ENABLED; do
+    for VAR in TELEGRAM_BOT_TOKEN DISCORD_BOT_TOKEN SLACK_BOT_TOKEN SLACK_APP_TOKEN; do
         VAL=$(grep "^${VAR}=" "$ENV_FILE" 2>/dev/null | cut -d'=' -f2-)
         if [ -n "$VAL" ] && [ "$VAL" != "your-token-here" ]; then
             HAS_MESSAGING=true
@@ -1381,24 +1381,6 @@ maybe_start_gateway() {
     echo ""
     log_info "Messaging platform token detected!"
     log_info "The gateway needs to be running for Hermes to send/receive messages."
-
-    # If WhatsApp is enabled and no session exists yet, run foreground first for QR scan
-    WHATSAPP_VAL=$(grep "^WHATSAPP_ENABLED=" "$ENV_FILE" 2>/dev/null | cut -d'=' -f2-)
-    WHATSAPP_SESSION="$HERMES_HOME/whatsapp/session/creds.json"
-    if [ "$WHATSAPP_VAL" = "true" ] && [ ! -f "$WHATSAPP_SESSION" ]; then
-        if [ "$IS_INTERACTIVE" = true ]; then
-            echo ""
-            log_info "WhatsApp is enabled but not yet paired."
-            log_info "Running 'hermes whatsapp' to pair via QR code..."
-            echo ""
-            if prompt_yes_no "Pair WhatsApp now?" "yes"; then
-                HERMES_CMD="$(get_hermes_command_path)"
-                $HERMES_CMD whatsapp || true
-            fi
-        else
-            log_info "WhatsApp pairing skipped (non-interactive). Run 'hermes whatsapp' to pair."
-        fi
-    fi
 
     # Probe by actually opening /dev/tty: a bare existence test passes
     # in Docker builds where the device node is in the mount namespace

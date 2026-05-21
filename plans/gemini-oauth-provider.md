@@ -62,13 +62,11 @@ Add a first-class `gemini` provider that authenticates via Google OAuth, using t
 10. `tests/agent/test_google_oauth.py` — OAuth flow unit tests
 11. `tests/test_api_key_providers.py` — Add gemini provider test
 
-### Docs
-12. `website/docs/getting-started/quickstart.md` — Add gemini to provider table
-13. `website/docs/user-guide/configuration.md` — Gemini setup section
-14. `website/docs/reference/environment-variables.md` — New env vars
+### Local references
+12. `README.md` / config examples — Update Gemini setup notes if this plan is revived.
 
 ## Estimated scope
-~400 lines new code, ~150 lines modifications, ~100 lines tests, ~50 lines docs = ~700 lines total
+~400 lines new code, ~150 lines modifications, ~100 lines tests, ~20 lines local reference updates = ~670 lines total
 
 ## Prerequisites
 - Nous Research GCP project with Desktop OAuth client registered

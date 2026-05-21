@@ -452,7 +452,7 @@ memory:
 # =============================================================================
 # Session Reset Policy (Messaging Platforms)
 # =============================================================================
-# Controls when messaging sessions (Telegram, Discord, WhatsApp, Slack) are
+# Controls when messaging sessions (Telegram, Discord, Slack, Signal, Email) are
 # automatically cleared. Without resets, conversation context grows indefinitely
 # which increases API costs with every message.
 #
@@ -589,7 +589,7 @@ agent:
 #   - A preset like "hermes-cli" or "hermes-telegram" (curated tool set)
 #   - A list of individual toolsets to compose your own (see list below)
 #
-# Supported platform keys: cli, telegram, discord, whatsapp, slack, qqbot, teams
+# Supported platform keys: cli, telegram, discord, slack, signal, email, homeassistant, webhook, api_server
 #
 # Examples:
 #
@@ -614,24 +614,23 @@ agent:
 #   cli:           hermes-cli            (everything + cronjob management)
 #   telegram:      hermes-telegram       (terminal, file, web, vision, image, tts, browser, skills, todo, cronjob, messaging)
 #   discord:       hermes-discord        (same as telegram)
-#   whatsapp:      hermes-whatsapp       (same as telegram)
 #   slack:         hermes-slack          (same as telegram)
 #   signal:        hermes-signal         (same as telegram)
 #   homeassistant: hermes-homeassistant  (same as telegram)
-#   qqbot:            hermes-qqbot            (same as telegram)
-#   teams:            hermes-teams            (same as telegram)
+#   email:         hermes-email          (same as telegram)
+#   webhook:       hermes-webhook        (same as telegram)
+#   api_server:    hermes-api-server     (same as telegram)
 #
 platform_toolsets:
   cli: [hermes-cli]
   telegram: [hermes-telegram]
   discord: [hermes-discord]
-  whatsapp: [hermes-whatsapp]
   slack: [hermes-slack]
   signal: [hermes-signal]
   homeassistant: [hermes-homeassistant]
-  qqbot: [hermes-qqbot]
-  yuanbao: [hermes-yuanbao]
-  teams: [hermes-teams]
+  email: [hermes-email]
+  webhook: [hermes-webhook]
+  api_server: [hermes-api-server]
 
 # =============================================================================
 # Gateway Platform Settings
@@ -675,8 +674,12 @@ platform_toolsets:
 #   hermes-telegram  - terminal, file, web, vision, image_gen, tts, browser,
 #                      skills, todo, cronjob, send_message
 #   hermes-discord   - Same as hermes-telegram
-#   hermes-whatsapp  - Same as hermes-telegram
 #   hermes-slack     - Same as hermes-telegram
+#   hermes-signal    - Same as hermes-telegram
+#   hermes-email     - Same as hermes-telegram
+#   hermes-homeassistant - Same as hermes-telegram
+#   hermes-webhook   - Same as hermes-telegram
+#   hermes-api-server - Same as hermes-telegram
 #
 # COMPOSITE:
 #   debugging    - terminal + web + file
@@ -714,7 +717,7 @@ platform_toolsets:
 # =============================================================================
 # Connect to external MCP servers to add tools from the MCP ecosystem.
 # Each server's tools are automatically discovered and registered.
-# See docs/mcp.md for full documentation.
+# Use `hermes mcp --help` and MCP server documentation for details.
 #
 # Stdio servers (spawn a subprocess):
 #   command: the executable to run
@@ -1008,8 +1011,7 @@ display:
 # runs (gateway, cron) need --accept-hooks, HERMES_ACCEPT_HOOKS=1, or the
 # hooks_auto_accept key below.
 #
-# See website/docs/user-guide/features/hooks.md for the full JSON wire
-# protocol and worked examples.
+# See `hermes hooks --help` for the JSON wire protocol and worked examples.
 #
 # hooks:
 #   pre_tool_call:

@@ -560,8 +560,8 @@ class HonchoClientConfig:
         return None
 
     # Honcho enforces a 100-char limit on session IDs. Long gateway session keys
-    # (Matrix "!room:server" + thread event IDs, Telegram supergroup reply
-    # chains, Slack thread IDs with long workspace prefixes) can overflow this
+    # (room/event IDs, Telegram supergroup reply chains, Slack thread IDs with
+    # long workspace prefixes) can overflow this
     # limit after sanitization; the Honcho API then rejects every call for that
     # session with "session_id too long". See issue #13868.
     _HONCHO_SESSION_ID_MAX_LEN = 100

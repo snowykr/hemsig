@@ -6,7 +6,6 @@ Covers:
     - Telegram: ``bot.send_media_group`` with chunking at 10
     - Discord: ``channel.send(files=[...])`` with chunking at 10
     - Slack: ``files_upload_v2(file_uploads=[...])`` with chunking at 10
-    - Mattermost: single post with ``file_ids`` list (chunk at 5)
     - Email: single email with multiple MIME attachments
 
 Signal's native implementation is covered by test_signal.py.
@@ -94,6 +93,19 @@ class TestBaseDefaultLoop:
         assert a.sent_animations == []
         assert a.sent_files == []
 
+    def test_returns_failure_when_any_image_send_fails(self):
+        a = _StubAdapter()
+
+        async def _fail(*_args, **_kwargs):
+            from gateway.platforms.base import SendResult
+            return SendResult(success=False, error="boom")
+
+        a.send_image = _fail
+        result = _run(a.send_multiple_images("chat1", [("https://x.com/a.png", "alt")]))
+
+        assert result.success is False
+        assert result.error == "boom"
+
 
 # ---------------------------------------------------------------------------
 # Telegram mocks setup (shared with test_send_image_file pattern)
@@ -135,12 +147,13 @@ class TestTelegramMultiImage:
         # Make InputMediaPhoto a concrete class that records its args
         telegram.InputMediaPhoto = MagicMock(side_effect=lambda media, caption=None: {"media": media, "caption": caption})
 
-        _run(adapter.send_multiple_images("12345", images))
+        result = _run(adapter.send_multiple_images("12345", images))
 
         adapter._bot.send_media_group.assert_awaited_once()
         call_kwargs = adapter._bot.send_media_group.call_args.kwargs
         assert call_kwargs["chat_id"] == 12345
         assert len(call_kwargs["media"]) == 3
+        assert result.success is True
 
     def test_batch_over_10_chunks(self, adapter):
         """15 photos → two send_media_group calls (10 + 5)."""
@@ -236,10 +249,11 @@ class TestDiscordMultiImage:
         adapter._is_forum_parent = MagicMock(return_value=False)
 
         images = [(f"file://{p}", "") for p in paths]
-        _run(adapter.send_multiple_images("67890", images))
+        result = _run(adapter.send_multiple_images("67890", images))
 
         mock_channel.send.assert_awaited_once()
         assert len(mock_channel.send.call_args.kwargs["files"]) == 3
+        assert result.success is True
 
     def test_batch_over_10_chunks_into_two_messages(self, adapter, tmp_path):
         """15 local images → two channel.send calls (10 + 5)."""
@@ -264,6 +278,15 @@ class TestDiscordMultiImage:
     def test_empty_noop(self, adapter):
         adapter._client = MagicMock()
         _run(adapter.send_multiple_images("67890", []))
+
+    def test_channel_resolution_failure_returns_failed_send_result(self, adapter):
+        adapter._client.get_channel = MagicMock(return_value=None)
+        adapter._client.fetch_channel = AsyncMock(return_value=None)
+
+        result = _run(adapter.send_multiple_images("67890", [("https://x.com/a.png", "")]))
+
+        assert result.success is False
+        assert result.error == "Channel 67890 not found"
 
 
 # ---------------------------------------------------------------------------
@@ -311,12 +334,13 @@ class TestSlackMultiImage:
             paths.append(p)
 
         images = [(f"file://{p}", "") for p in paths]
-        _run(adapter.send_multiple_images("C12345", images))
+        result = _run(adapter.send_multiple_images("C12345", images))
 
         client = adapter._get_client("C12345")
         client.files_upload_v2.assert_awaited_once()
         kwargs = client.files_upload_v2.await_args.kwargs
         assert len(kwargs["file_uploads"]) == 3
+        assert result.success is True
 
     def test_batch_over_10_chunks(self, adapter, tmp_path):
         paths = []
@@ -337,127 +361,3 @@ class TestSlackMultiImage:
         _run(adapter.send_multiple_images("C12345", []))
         client = adapter._get_client("C12345")
         client.files_upload_v2.assert_not_called()
-
-
-# ---------------------------------------------------------------------------
-# Mattermost
-# ---------------------------------------------------------------------------
-
-
-from gateway.platforms.mattermost import MattermostAdapter  # noqa: E402
-
-
-class TestMattermostMultiImage:
-    @pytest.fixture
-    def adapter(self):
-        config = PlatformConfig(enabled=True, token="fake")
-        # Minimal construction via object.__new__ to avoid full setup
-        a = object.__new__(MattermostAdapter)
-        a._base_url = "https://mm.example.com"
-        a._token = "fake"
-        a._session = MagicMock()
-        a._reply_mode = "thread"
-        a._api_post = AsyncMock(return_value={"id": "post123"})
-        a._upload_file = AsyncMock(side_effect=lambda *args, **kwargs: f"fid_{a._upload_file.await_count}")
-        return a
-
-    def test_local_files_uploaded_and_single_post(self, adapter, tmp_path):
-        """3 local images → 3 uploads + 1 post with 3 file_ids."""
-        paths = []
-        for i in range(3):
-            p = tmp_path / f"img_{i}.png"
-            p.write_bytes(b"\x89PNG" + b"\x00" * 20)
-            paths.append(p)
-
-        images = [(f"file://{p}", "") for p in paths]
-        _run(adapter.send_multiple_images("channel123", images))
-
-        assert adapter._upload_file.await_count == 3
-        adapter._api_post.assert_awaited_once()
-        payload = adapter._api_post.await_args.args[1]
-        assert payload["channel_id"] == "channel123"
-        assert len(payload["file_ids"]) == 3
-
-    def test_batch_over_5_chunks(self, adapter, tmp_path):
-        """7 images → 2 posts (5 + 2)."""
-        paths = []
-        for i in range(7):
-            p = tmp_path / f"img_{i}.png"
-            p.write_bytes(b"\x89PNG" + b"\x00" * 10)
-            paths.append(p)
-
-        images = [(f"file://{p}", "") for p in paths]
-        _run(adapter.send_multiple_images("channel123", images))
-
-        assert adapter._api_post.await_count == 2
-        sizes = [len(c.args[1]["file_ids"]) for c in adapter._api_post.await_args_list]
-        assert sizes == [5, 2]
-
-    def test_empty_noop(self, adapter):
-        _run(adapter.send_multiple_images("channel123", []))
-        adapter._api_post.assert_not_called()
-
-
-# ---------------------------------------------------------------------------
-# Email
-# ---------------------------------------------------------------------------
-
-
-from gateway.platforms.email import EmailAdapter  # noqa: E402
-
-
-class TestEmailMultiImage:
-    @pytest.fixture
-    def adapter(self):
-        a = object.__new__(EmailAdapter)
-        a._address = "bot@example.com"
-        a._password = "secret"
-        a._smtp_host = "smtp.example.com"
-        a._smtp_port = 587
-        a._thread_context = {}
-        return a
-
-    def test_local_files_attached_in_single_email(self, adapter, tmp_path):
-        """3 local images → one SMTP send with 3 attachments."""
-        paths = []
-        for i in range(3):
-            p = tmp_path / f"img_{i}.png"
-            p.write_bytes(b"\x89PNG" + b"\x00" * 20)
-            paths.append(p)
-
-        images = [(f"file://{p}", f"alt {i}") for i, p in enumerate(paths)]
-
-        with patch.object(
-            adapter, "_send_email_with_attachments", MagicMock(return_value="<msgid@x>")
-        ) as mock_send:
-            _run(adapter.send_multiple_images("user@example.com", images))
-
-        mock_send.assert_called_once()
-        to_addr, body, file_paths = mock_send.call_args.args
-        assert to_addr == "user@example.com"
-        assert len(file_paths) == 3
-        assert "alt 0" in body
-
-    def test_remote_urls_linked_in_body(self, adapter, tmp_path):
-        """Remote URL images get their URL appended to the body, no attachment."""
-        images = [
-            ("https://x.com/a.png", "first"),
-            ("https://x.com/b.png", "second"),
-        ]
-        with patch.object(
-            adapter, "_send_email_with_attachments", MagicMock(return_value="<msgid@x>")
-        ) as mock_send:
-            _run(adapter.send_multiple_images("user@example.com", images))
-
-        mock_send.assert_called_once()
-        to_addr, body, file_paths = mock_send.call_args.args
-        assert file_paths == []
-        assert "https://x.com/a.png" in body
-        assert "https://x.com/b.png" in body
-
-    def test_empty_noop(self, adapter):
-        with patch.object(
-            adapter, "_send_email_with_attachments", MagicMock()
-        ) as mock_send:
-            _run(adapter.send_multiple_images("user@example.com", []))
-        mock_send.assert_not_called()

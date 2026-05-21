@@ -2799,6 +2799,7 @@ def _(rid, params: dict) -> dict:
 @method("prompt.submit")
 def _(rid, params: dict) -> dict:
     sid, text = params.get("session_id", ""), params.get("text", "")
+    workflow_activation = params.get("workflow_activation")
     session, err = _sess_nowait(params, rid)
     if err:
         return err
@@ -2816,13 +2817,19 @@ def _(rid, params: dict) -> dict:
             with session["history_lock"]:
                 session["running"] = False
             return
-        _run_prompt_submit(rid, sid, session, text)
+        _run_prompt_submit(rid, sid, session, text, workflow_activation)
 
     threading.Thread(target=run_after_agent_ready, daemon=True).start()
     return _ok(rid, {"status": "streaming"})
 
 
-def _run_prompt_submit(rid, sid: str, session: dict, text: Any) -> None:
+def _run_prompt_submit(
+    rid,
+    sid: str,
+    session: dict,
+    text: Any,
+    workflow_activation: dict[str, Any] | None = None,
+) -> None:
     with session["history_lock"]:
         history = list(session["history"])
         history_version = int(session.get("history_version", 0))
@@ -2845,6 +2852,9 @@ def _run_prompt_submit(rid, sid: str, session: dict, text: Any) -> None:
             cols = session.get("cols", 80)
             streamer = make_stream_renderer(cols)
             prompt = text
+
+            if workflow_activation is not None:
+                agent.activate_workflow(workflow_activation)
 
             if isinstance(prompt, str) and "@" in prompt:
                 from agent.context_references import preprocess_context_references
@@ -3177,7 +3187,6 @@ def _(rid, params: dict) -> dict:
         drop_path = dropped["path"]
         remainder = dropped["remainder"]
         if dropped["is_image"]:
-            session.setdefault("attached_images", []).append(str(drop_path))
             text = remainder or f"[User attached image: {drop_path.name}]"
             return _ok(
                 rid,
@@ -3185,7 +3194,8 @@ def _(rid, params: dict) -> dict:
                     "matched": True,
                     "is_image": True,
                     "path": str(drop_path),
-                    "count": len(session["attached_images"]),
+                    "name": drop_path.name,
+                    "remainder": remainder,
                     "text": text,
                     **_image_meta(drop_path),
                 },
@@ -4171,22 +4181,27 @@ def _(rid, params: dict) -> dict:
         from agent.skill_commands import (
             scan_skill_commands,
             build_skill_invocation_message,
+            workflow_activation_for_skill_command,
         )
 
         cmds = scan_skill_commands()
         key = f"/{name}"
         if key in cmds:
+            workflow_activation = workflow_activation_for_skill_command(key)
             msg = build_skill_invocation_message(
                 key, arg, task_id=session.get("session_key", "") if session else ""
             )
             if msg:
+                payload = {
+                    "type": "skill",
+                    "message": msg,
+                    "name": cmds[key].get("name", name),
+                }
+                if workflow_activation is not None:
+                    payload["workflow_activation"] = workflow_activation.to_dict()
                 return _ok(
                     rid,
-                    {
-                        "type": "skill",
-                        "message": msg,
-                        "name": cmds[key].get("name", name),
-                    },
+                    payload,
                 )
     except Exception:
         pass

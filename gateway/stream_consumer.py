@@ -124,7 +124,7 @@ class GatewayStreamConsumer:
         self._current_edit_interval = self.cfg.edit_interval  # Adaptive backoff
         self._final_response_sent = False
         # Cache adapter lifecycle capability: only platforms that need an
-        # explicit finalize call (e.g. DingTalk AI Cards) force us to make
+        # explicit finalize call for rich in-progress message surfaces force us to make
         # a redundant final edit.  Everyone else keeps the fast path.
         # Use ``is True`` (not ``bool(...)``) so MagicMock attribute access
         # in tests doesn't incorrectly enable this path.
@@ -404,7 +404,7 @@ class GatewayStreamConsumer:
                         display_text += self.cfg.cursor
 
                     # Segment break: finalize the current message so platforms
-                    # that need explicit closure (e.g. DingTalk AI Cards) don't
+                    # that need explicit closure don't
                     # leave the previous segment stuck in a loading state when
                     # the next segment (tool progress, next chunk) creates a
                     # new message below it.  got_done has its own finalize
@@ -884,7 +884,7 @@ class GatewayStreamConsumer:
         # before switching to tool calls; the resulting "X ▉" message risks
         # leaving the cursor permanently visible if the follow-up edit (to
         # strip the cursor on segment break) is rate-limited by the platform.
-        # This was reported on Telegram, Matrix, and other clients where the
+        # This was reported on Telegram and other clients where the
         # ▉ block character renders as a visible white box ("tofu").
         # Existing messages (edits) are unaffected — only first sends gated.
         _MIN_NEW_MSG_CHARS = 4
@@ -923,12 +923,21 @@ class GatewayStreamConsumer:
                     ):
                         return True
                     # Edit existing message
-                    result = await self.adapter.edit_message(
-                        chat_id=self.chat_id,
-                        message_id=self._message_id,
-                        content=text,
-                        finalize=finalize,
-                    )
+                    try:
+                        result = await self.adapter.edit_message(
+                            chat_id=self.chat_id,
+                            message_id=self._message_id,
+                            content=text,
+                            finalize=finalize,
+                        )
+                    except TypeError as exc:
+                        if "finalize" not in str(exc):
+                            raise
+                        result = await self.adapter.edit_message(
+                            chat_id=self.chat_id,
+                            message_id=self._message_id,
+                            content=text,
+                        )
                     if result.success:
                         self._already_sent = True
                         self._last_sent_text = text

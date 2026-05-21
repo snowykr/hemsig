@@ -8,11 +8,26 @@ Covers:
      input() call) and the stash is applied automatically
 """
 
+import importlib
 import subprocess
+import sys
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from hermes_cli.main import cmd_update
+import pytest
+
+import hermes_cli.main as cli_main
+
+
+@pytest.fixture(autouse=True)
+def _refresh_cli_main_binding():
+    global cli_main
+
+    live = sys.modules.get("hermes_cli.main")
+    if live is None:
+        live = importlib.import_module("hermes_cli.main")
+    cli_main = live
+    yield
 
 
 def _make_run_side_effect(
@@ -54,12 +69,16 @@ class TestUpdateYesConfigMigration:
     @patch("hermes_cli.config.check_config_version", return_value=(1, 2))
     @patch("hermes_cli.config.get_missing_config_fields", return_value=[])
     @patch("hermes_cli.config.get_missing_env_vars", return_value=["NEW_KEY"])
+    @patch("hermes_cli.main._finalize_update_output")
+    @patch("hermes_cli.main._install_hangup_protection", return_value={})
     @patch("shutil.which", return_value=None)
     @patch("subprocess.run")
     def test_yes_auto_migrates_without_input(
         self,
         mock_run,
         _mock_which,
+        _mock_install_hangup,
+        _mock_finalize,
         _mock_missing_env,
         _mock_missing_cfg,
         _mock_version,
@@ -74,7 +93,7 @@ class TestUpdateYesConfigMigration:
         args = SimpleNamespace(yes=True)
 
         with patch("builtins.input") as mock_input:
-            cmd_update(args)
+            cli_main.cmd_update(args)
             # Never prompted the user.
             mock_input.assert_not_called()
 
@@ -93,12 +112,16 @@ class TestUpdateYesConfigMigration:
     @patch("hermes_cli.config.check_config_version", return_value=(1, 2))
     @patch("hermes_cli.config.get_missing_config_fields", return_value=[])
     @patch("hermes_cli.config.get_missing_env_vars", return_value=["NEW_KEY"])
+    @patch("hermes_cli.main._finalize_update_output")
+    @patch("hermes_cli.main._install_hangup_protection", return_value={})
     @patch("shutil.which", return_value=None)
     @patch("subprocess.run")
     def test_no_yes_flag_still_prompts_in_tty(
         self,
         mock_run,
         _mock_which,
+        _mock_install_hangup,
+        _mock_finalize,
         _mock_missing_env,
         _mock_missing_cfg,
         _mock_version,
@@ -118,7 +141,7 @@ class TestUpdateYesConfigMigration:
         ) as mock_sys:
             mock_sys.stdin.isatty.return_value = True
             mock_sys.stdout.isatty.return_value = True
-            cmd_update(args)
+            cli_main.cmd_update(args)
             # The user was actually prompted.
             assert mock_input.called
             prompts = [c.args[0] if c.args else "" for c in mock_input.call_args_list]
@@ -136,12 +159,16 @@ class TestUpdateYesStashRestore:
     @patch("hermes_cli.config.check_config_version", return_value=(1, 1))
     @patch("hermes_cli.config.get_missing_config_fields", return_value=[])
     @patch("hermes_cli.config.get_missing_env_vars", return_value=[])
+    @patch("hermes_cli.main._finalize_update_output")
+    @patch("hermes_cli.main._install_hangup_protection", return_value={})
     @patch("shutil.which", return_value=None)
     @patch("subprocess.run")
     def test_yes_restores_stash_without_prompting(
         self,
         mock_run,
         _mock_which,
+        _mock_install_hangup,
+        _mock_finalize,
         _mock_missing_env,
         _mock_missing_cfg,
         _mock_version,
@@ -156,7 +183,7 @@ class TestUpdateYesStashRestore:
 
         args = SimpleNamespace(yes=True)
 
-        cmd_update(args)
+        cli_main.cmd_update(args)
 
         # _restore_stashed_changes was called, and called with prompt_user=False
         # every time (so the user never sees "Restore local changes now?").

@@ -261,7 +261,7 @@ _PROVIDERS_WITHOUT_VISION: frozenset = frozenset({
 
 # OpenRouter app attribution headers
 _OR_HEADERS = {
-    "HTTP-Referer": "https://hermes-agent.nousresearch.com",
+    "HTTP-Referer": "https://github.com/NousResearch/hermes-agent",
     "X-OpenRouter-Title": "Hermes Agent",
     "X-OpenRouter-Categories": "productivity,cli-agent",
 }
@@ -271,7 +271,7 @@ _OR_HEADERS = {
 from hermes_cli import __version__ as _HERMES_VERSION
 
 _AI_GATEWAY_HEADERS = {
-    "HTTP-Referer": "https://hermes-agent.nousresearch.com",
+    "HTTP-Referer": "https://github.com/NousResearch/hermes-agent",
     "X-Title": "Hermes Agent",
     "User-Agent": f"HermesAgent/{_HERMES_VERSION}",
 }

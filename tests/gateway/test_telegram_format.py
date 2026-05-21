@@ -6,6 +6,9 @@ or corrupt user-visible content.
 """
 
 import re
+
+from gateway.platforms.base import utf16_len
+from gateway.platforms.telegram import _escape_chunk_indicators_for_markdown_v2
 import sys
 from unittest.mock import AsyncMock, MagicMock
 
@@ -716,3 +719,11 @@ async def test_send_escapes_chunk_indicator_for_markdownv2(adapter):
     assert len(sent_texts) > 1
     assert re.search(r" \\\([0-9]+/[0-9]+\\\)$", sent_texts[0])
     assert re.search(r" \\\([0-9]+/[0-9]+\\\)$", sent_texts[-1])
+
+
+def test_escape_chunk_indicator_preserves_utf16_limit():
+    raw_chunk = "x" * (4096 - len(" (1/2)")) + " (1/2)"
+    escaped = _escape_chunk_indicators_for_markdown_v2([raw_chunk, "tail (2/2)"], 4096)
+
+    assert utf16_len(escaped[0]) <= 4096
+    assert re.search(r" \\\([0-9]+/[0-9]+\\\)$", escaped[0])

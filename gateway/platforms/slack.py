@@ -973,7 +973,7 @@ class SlackAdapter(BasePlatformAdapter):
         images: List[Tuple[str, str]],
         metadata: Optional[Dict[str, Any]] = None,
         human_delay: float = 0.0,
-    ) -> None:
+    ) -> Optional[SendResult]:
         """Send a batch of images as a single Slack message with multiple file uploads.
 
         Uses ``files_upload_v2`` with its ``file_uploads`` parameter so all
@@ -984,17 +984,19 @@ class SlackAdapter(BasePlatformAdapter):
         The batch limit is 10 file uploads per call (Slack server-side cap).
         """
         if not self._app:
-            return
+            return SendResult(success=False, error="Not connected")
         if not images:
-            return
+            return SendResult(success=True)
+
+        had_failure = False
+        last_error: Optional[str] = None
 
         try:
             import httpx as _httpx
             from urllib.parse import unquote as _unquote
             from tools.url_safety import is_safe_url as _is_safe_url
         except Exception:
-            await super().send_multiple_images(chat_id, images, metadata, human_delay)
-            return
+            return await super().send_multiple_images(chat_id, images, metadata, human_delay)
 
         thread_ts = self._resolve_thread_ts(None, metadata)
 
@@ -1070,7 +1072,14 @@ class SlackAdapter(BasePlatformAdapter):
                     chunk_idx + 1, len(chunks), e,
                     exc_info=True,
                 )
-                await super().send_multiple_images(chat_id, chunk, metadata, human_delay=human_delay)
+                fallback_result = await super().send_multiple_images(chat_id, chunk, metadata, human_delay=human_delay)
+                if fallback_result is not None and not fallback_result.success:
+                    had_failure = True
+                    last_error = fallback_result.error or str(e)
+
+        if had_failure:
+            return SendResult(success=False, error=last_error or "Slack image delivery failed")
+        return SendResult(success=True)
 
     def _record_uploaded_file_thread(self, chat_id: str, thread_ts: Optional[str]) -> None:
         """Treat successful file uploads as bot participation in a thread."""
@@ -2869,7 +2878,7 @@ class SlackAdapter(BasePlatformAdapter):
     def _slack_require_mention(self) -> bool:
         """Return whether channel messages require an explicit bot mention.
 
-        Uses explicit-false parsing (like Discord/Matrix) rather than
+        Uses explicit-false parsing (like Discord) rather than
         truthy parsing, since the safe default is True (gating on).
         Unrecognised or empty values keep gating enabled.
         """

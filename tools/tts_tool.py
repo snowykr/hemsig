@@ -19,11 +19,11 @@ Custom command providers:
   under ``tts.providers.<name>`` in ``~/.hermes/config.yaml``. Hermes
   writes the input text to a temp file and runs the configured shell
   command, which must produce the audio file at the expected path.
-  See the Local Command section of ``website/docs/user-guide/features/tts.md``.
+  See the Local Command section of ``the TTS local-command setup notes``.
 
 Output formats:
 - Opus (.ogg) for Telegram voice bubbles (requires ffmpeg for Edge TTS)
-- MP3 (.mp3) for everything else (CLI, Discord, WhatsApp)
+- MP3 (.mp3) for everything else (CLI, Discord, Slack, local playback)
 
 Configuration is loaded from ~/.hermes/config.yaml under the 'tts:' key.
 The user chooses the provider and voice; the model just sends text.

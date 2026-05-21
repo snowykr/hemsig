@@ -4,18 +4,21 @@ import { TYPING_IDLE_MS } from '../config/timing.js'
 import { attachedImageNotice } from '../domain/messages.js'
 import { looksLikeSlashCommand } from '../domain/slash.js'
 import type { GatewayClient } from '../gatewayClient.js'
+import { takeDrainableQueuedSubmission } from '../hooks/useQueue.js'
 import type {
+  ImageAttachResponse,
   InputDetectDropResponse,
   PromptSubmitResponse,
   SessionSteerResponse,
-  ShellExecResponse
+  ShellExecResponse,
+  WorkflowActivation
 } from '../gatewayTypes.js'
 import { asRpcResult } from '../lib/rpc.js'
 import { hasInterpolation, INTERPOLATION_RE } from '../protocol/interpolation.js'
 import { PASTE_SNIPPET_RE } from '../protocol/paste.js'
 import type { Msg } from '../types.js'
 
-import type { ComposerActions, ComposerRefs, ComposerState, PasteSnippet } from './interfaces.js'
+import type { BusyInputMode, ComposerActions, ComposerRefs, ComposerState, PasteSnippet, QueuedSubmission } from './interfaces.js'
 import { turnController } from './turnController.js'
 import { getUiState, patchUiState } from './uiStore.js'
 
@@ -37,6 +40,79 @@ const expandSnips = (snips: PasteSnippet[]) => {
 
 const spliceMatches = (text: string, matches: RegExpMatchArray[], results: string[]) =>
   matches.reduceRight((acc, m, i) => acc.slice(0, m.index!) + results[i] + acc.slice(m.index! + m[0].length), text)
+
+export const queueSubmissionForLater = (
+  text: string,
+  sid?: null | string,
+  workflowActivation?: WorkflowActivation
+): QueuedSubmission => ({
+  sid: sid || undefined,
+  text,
+  workflowActivation
+})
+
+export const resolveSubmissionSid = (fixedSid?: null | string, liveSid?: null | string): null | string => {
+  if (fixedSid?.trim()) {
+    return fixedSid
+  }
+
+  if (liveSid?.trim()) {
+    return liveSid
+  }
+
+  return null
+}
+
+export const shouldCancelStaleSubmission = (
+  fixedSid?: null | string,
+  currentSid?: null | string,
+  allowCapturedSidReplay = false
+): boolean => !!fixedSid && fixedSid !== currentSid && !allowCapturedSidReplay
+
+export const prepareEditedQueuedSubmission = (
+  existing: QueuedSubmission | undefined,
+  text: string,
+  currentSid?: null | string
+):
+  | { kind: 'missing' }
+  | { entry: QueuedSubmission; kind: 'ready' }
+  | { entry: QueuedSubmission; kind: 'stale' } => {
+  if (!existing) {
+    return { kind: 'missing' }
+  }
+
+  const entry = { ...existing, text }
+
+  if (entry.sid && currentSid && entry.sid !== currentSid) {
+    return { kind: 'stale', entry }
+  }
+
+  return { entry, kind: 'ready' }
+}
+
+export const canSteerSubmission = (submission: QueuedSubmission | string): boolean => {
+  if (typeof submission === 'string') {
+    return true
+  }
+
+  return !submission.workflowActivation
+}
+
+export const resolveBusyInputDisposition = (
+  mode: BusyInputMode,
+  liveSid: null | string,
+  submission: QueuedSubmission | string
+): 'interrupt' | 'queue' | 'steer' => {
+  if (mode === 'queue') {
+    return 'queue'
+  }
+
+  if (mode === 'steer' && liveSid) {
+    return canSteerSubmission(submission) ? 'steer' : 'queue'
+  }
+
+  return 'interrupt'
+}
 
 export function useSubmission(opts: UseSubmissionOptions) {
   const {
@@ -85,11 +161,28 @@ export function useSubmission(opts: UseSubmissionOptions) {
   }, [composerState.input, composerState.inputBuf])
 
   const send = useCallback(
-    (text: string, showUserMessage = true) => {
+    (
+      text: string,
+      showUserMessage = true,
+      workflowActivation?: WorkflowActivation,
+      fixedSid?: string
+    ) => {
       const expand = expandSnips(composerState.pasteSnips)
 
-      const startSubmit = (displayText: string, submitText: string, showUserMessage = true) => {
-        const sid = getUiState().sid
+      const startSubmit = (
+        displayText: string,
+        submitText: string,
+        showUserMessage = true,
+        submitWorkflowActivation?: WorkflowActivation,
+        submitSid?: string
+      ) => {
+        const currentSid = getUiState().sid
+
+        if (shouldCancelStaleSubmission(submitSid, currentSid)) {
+          return sys('session changed — cancelled pending submission')
+        }
+
+        const sid = resolveSubmissionSid(submitSid, currentSid)
 
         if (!sid) {
           return sys('session not ready yet')
@@ -107,9 +200,13 @@ export function useSubmission(opts: UseSubmissionOptions) {
         turnController.bufRef = ''
         turnController.interrupted = false
 
-        gw.request<PromptSubmitResponse>('prompt.submit', { session_id: sid, text: submitText }).catch((e: Error) => {
+        gw.request<PromptSubmitResponse>('prompt.submit', {
+          session_id: sid,
+          text: submitText,
+          workflow_activation: submitWorkflowActivation
+        }).catch((e: Error) => {
           if (isSessionBusyError(e)) {
-            composerActions.enqueue(submitText)
+            composerActions.enqueue(queueSubmissionForLater(submitText, sid, submitWorkflowActivation))
             patchUiState({ busy: true, status: 'queued for next turn' })
 
             return sys(`queued: "${submitText.slice(0, 50)}${submitText.length > 50 ? '…' : ''}"`)
@@ -120,7 +217,7 @@ export function useSubmission(opts: UseSubmissionOptions) {
         })
       }
 
-      const sid = getUiState().sid
+      const sid = resolveSubmissionSid(fixedSid, getUiState().sid)
 
       if (!sid) {
         return sys('session not ready yet')
@@ -132,18 +229,30 @@ export function useSubmission(opts: UseSubmissionOptions) {
       gw.request<InputDetectDropResponse>('input.detect_drop', { session_id: sid, text })
         .then(r => {
           if (!r?.matched) {
-            return startSubmit(text, expand(text), showUserMessage)
+            return startSubmit(text, expand(text), showUserMessage, workflowActivation, sid)
+          }
+
+          if (shouldCancelStaleSubmission(sid, getUiState().sid)) {
+            return sys('session changed — cancelled pending submission')
           }
 
           if (r.is_image) {
-            turnController.pushActivity(attachedImageNotice(r))
-          } else {
-            turnController.pushActivity(`detected file: ${r.name}`)
+            return gw.request<ImageAttachResponse>('image.attach', { path: r.path, session_id: sid })
+              .then(attached => {
+                if (shouldCancelStaleSubmission(sid, getUiState().sid)) {
+                  return sys('session changed — cancelled pending submission')
+                }
+
+                turnController.pushActivity(attachedImageNotice(attached))
+                startSubmit(r.text || text, expand(r.text || text), showUserMessage, workflowActivation, sid)
+              })
+              .catch(() => startSubmit(r.text || text, expand(r.text || text), showUserMessage, workflowActivation, sid))
           }
 
-          startSubmit(r.text || text, expand(r.text || text), showUserMessage)
+          turnController.pushActivity(`detected file: ${r.name}`)
+          startSubmit(r.text || text, expand(r.text || text), showUserMessage, workflowActivation, sid)
         })
-        .catch(() => startSubmit(text, expand(text), showUserMessage))
+        .catch(() => startSubmit(text, expand(text), showUserMessage, workflowActivation, sid))
     },
     [appendMessage, composerActions, composerState.pasteSnips, gw, maybeGoodVibes, setLastUserMsg, sys]
   )
@@ -199,18 +308,20 @@ export function useSubmission(opts: UseSubmissionOptions) {
   )
 
   const sendQueued = useCallback(
-    (text: string) => {
-      if (text.startsWith('!')) {
-        return shellExec(text.slice(1).trim())
+    (entry: QueuedSubmission | string) => {
+      const queued = typeof entry === 'string' ? { text: entry } : entry
+
+      if (queued.text.startsWith('!')) {
+        return shellExec(queued.text.slice(1).trim())
       }
 
-      if (hasInterpolation(text)) {
+      if (hasInterpolation(queued.text)) {
         patchUiState({ busy: true })
 
-        return interpolate(text, send)
+        return interpolate(queued.text, result => send(result, true, queued.workflowActivation, queued.sid))
       }
 
-      send(text)
+      send(queued.text, true, queued.workflowActivation, queued.sid)
     },
     [interpolate, send, shellExec]
   )
@@ -227,26 +338,33 @@ export function useSubmission(opts: UseSubmissionOptions) {
   // at the front of the queue (used by the queue-edit path to preserve
   // a picked item's position); the mainline submit path always appends.
   const handleBusyInput = useCallback(
-    (full: string, opts: { fallbackToFront?: boolean } = {}) => {
+    (entry: QueuedSubmission | string, opts: { fallbackToFront?: boolean } = {}) => {
+      const queued = typeof entry === 'string' ? { text: entry } : entry
+      const full = queued.text
       const live = getUiState()
       const mode = live.busyInputMode
+      const disposition = resolveBusyInputDisposition(mode, live.sid, queued)
 
       const fallback = (note: string) => {
         if (opts.fallbackToFront) {
-          composerRefs.queueRef.current.unshift(full)
+          composerRefs.queueRef.current.unshift(queued)
           composerActions.syncQueue()
         } else {
-          composerActions.enqueue(full)
+          composerActions.enqueue(queued)
         }
 
         sys(note)
       }
 
-      if (mode === 'queue') {
-        return composerActions.enqueue(full)
+      if (disposition === 'queue') {
+        if (mode === 'queue') {
+          return composerActions.enqueue(queued)
+        }
+
+        return fallback('steer unavailable — message queued for next turn')
       }
 
-      if (mode === 'steer' && live.sid) {
+      if (disposition === 'steer') {
         gw.request<SessionSteerResponse>('session.steer', { session_id: live.sid, text: full })
           .then(raw => {
             const r = asRpcResult<SessionSteerResponse>(raw)
@@ -273,16 +391,19 @@ export function useSubmission(opts: UseSubmissionOptions) {
       if (hasInterpolation(full)) {
         patchUiState({ busy: true })
 
-        return interpolate(full, send)
+        return interpolate(full, result => send(result, true, queued.workflowActivation, queued.sid))
       }
 
-      send(full)
+      send(full, true, queued.workflowActivation, queued.sid)
     },
     [appendMessage, composerActions, composerRefs, gw, interpolate, send, sys]
   )
 
   const dispatchSubmission = useCallback(
-    (full: string) => {
+    (submission: QueuedSubmission | string) => {
+      const queued = typeof submission === 'string' ? null : submission
+      const full = typeof submission === 'string' ? submission : submission.text
+
       if (!full.trim()) {
         return
       }
@@ -304,9 +425,14 @@ export function useSubmission(opts: UseSubmissionOptions) {
 
       const live = getUiState()
 
+      if (queued?.sid && live.sid && queued.sid !== live.sid) {
+        composerActions.clearIn()
+        return sys('session changed — cancelled pending submission')
+      }
+
       if (!live.sid) {
         composerActions.pushHistory(full)
-        composerActions.enqueue(full)
+        composerActions.enqueue(queued ?? full)
         composerActions.clearIn()
 
         return
@@ -316,8 +442,25 @@ export function useSubmission(opts: UseSubmissionOptions) {
       composerActions.clearIn()
 
       if (editIdx !== null) {
-        composerActions.replaceQueue(editIdx, full)
-        const picked = composerRefs.queueRef.current.splice(editIdx, 1)[0]
+        const prepared = prepareEditedQueuedSubmission(
+          composerRefs.queueRef.current[editIdx],
+          full,
+          live.sid,
+        )
+
+        if (prepared.kind === 'missing') {
+          composerActions.setQueueEdit(null)
+          return
+        }
+
+        if (prepared.kind === 'stale') {
+          composerActions.replaceQueue(editIdx, full)
+          composerActions.setQueueEdit(null)
+          return sys('session changed — cancelled pending submission')
+        }
+
+        const picked = prepared.entry
+        composerRefs.queueRef.current.splice(editIdx, 1)
         composerActions.syncQueue()
         composerActions.setQueueEdit(null)
 
@@ -344,16 +487,16 @@ export function useSubmission(opts: UseSubmissionOptions) {
       composerActions.pushHistory(full)
 
       if (getUiState().busy) {
-        return handleBusyInput(full)
+        return handleBusyInput(queued ?? full)
       }
 
       if (hasInterpolation(full)) {
         patchUiState({ busy: true })
 
-        return interpolate(full, send)
+        return interpolate(full, result => send(result, true, queued?.workflowActivation, queued?.sid))
       }
 
-      send(full)
+      send(full, true, queued?.workflowActivation, queued?.sid)
     },
     [appendMessage, composerActions, composerRefs, handleBusyInput, interpolate, send, sendQueued, shellExec, slashRef]
   )
@@ -384,11 +527,10 @@ export function useSubmission(opts: UseSubmissionOptions) {
         }
 
         if (doubleTap && live.sid && composerRefs.queueRef.current.length) {
-          const next = composerActions.dequeue()
-
-          composerActions.syncQueue()
+          const next = takeDrainableQueuedSubmission(composerRefs.queueRef.current, live.sid)
 
           if (next) {
+            composerActions.syncQueue()
             composerActions.setQueueEdit(null)
             dispatchSubmission(next)
           }

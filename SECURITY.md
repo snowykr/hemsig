@@ -64,7 +64,7 @@ The following scenarios are **not** considered security breaches:
 ### Filesystem & Network
 - **Production sandboxing:** Use container backends (`docker`, `modal`, `daytona`) instead of `local` for untrusted workloads.
 - **File permissions:** Run as non-root (the Docker image uses UID 10000); protect credentials with `chmod 600 ~/.hermes/.env` on local installs.
-- **Network exposure:** Do not expose the gateway or API server to the public internet without VPN, Tailscale, or firewall protection. SSRF protection is enabled by default across all gateway platform adapters (Telegram, Discord, Slack, Matrix, Mattermost, etc.) with redirect validation. Note: the local terminal backend does not apply SSRF filtering, as it operates within the trusted operator's environment.
+- **Network exposure:** Do not expose the gateway or API server to the public internet without VPN, Tailscale, or firewall protection. SSRF protection is enabled by default across gateway platform adapters with redirect validation. Note: the local terminal backend does not apply SSRF filtering, as it operates within the trusted operator's environment.
 
 ### Skills & Supply Chain
 - **Skill installation:** Review Skills Guard reports (`tools/skills_guard.py`) before installing third-party skills. The audit log at `~/.hermes/skills/.hub/audit.log` tracks every install and removal.

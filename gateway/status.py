@@ -193,6 +193,62 @@ def _build_runtime_status_record() -> dict[str, Any]:
     return payload
 
 
+def _is_known_runtime_platform(name: str) -> bool:
+    normalized = str(name or "").strip()
+    if not normalized:
+        return False
+
+    try:
+        from hermes_cli.plugins import discover_plugins
+
+        discover_plugins()  # idempotent; keeps registered plugin platforms visible here
+    except Exception:
+        pass
+
+    normalized = normalized.lower()
+
+    try:
+        from gateway.config import _BUILTIN_PLATFORM_VALUES, Platform
+        from gateway.platform_registry import platform_registry
+
+        if normalized in _BUILTIN_PLATFORM_VALUES:
+            return True
+        if normalized in Platform._scan_bundled_plugin_platforms():
+            return True
+        return platform_registry.is_registered(normalized)
+    except Exception:
+        return False
+
+
+def _prune_unknown_runtime_platforms(payload: dict[str, Any]) -> dict[str, Any]:
+    """Drop malformed or no-longer-known runtime platform keys."""
+    platforms = payload.get("platforms")
+    if not isinstance(platforms, dict) or not platforms:
+        return payload
+
+    valid: dict[str, Any] = {}
+    changed = False
+    for name, data in platforms.items():
+        if not isinstance(name, str):
+            changed = True
+            continue
+        normalized = name.strip()
+        if not normalized:
+            changed = True
+            continue
+        if normalized != name:
+            changed = True
+        if not _is_known_runtime_platform(normalized):
+            changed = True
+            continue
+        valid[normalized] = data
+
+    if changed:
+        payload = dict(payload)
+        payload["platforms"] = valid
+    return payload
+
+
 def _read_json_file(path: Path) -> Optional[dict[str, Any]]:
     if not path.exists():
         return None
@@ -206,7 +262,11 @@ def _read_json_file(path: Path) -> Optional[dict[str, Any]]:
         payload = json.loads(raw)
     except json.JSONDecodeError:
         return None
-    return payload if isinstance(payload, dict) else None
+    if not isinstance(payload, dict):
+        return None
+    if path.name == _RUNTIME_STATUS_FILE:
+        payload = _prune_unknown_runtime_platforms(payload)
+    return payload
 
 
 def _write_json_file(path: Path, payload: dict[str, Any]) -> None:
@@ -406,7 +466,9 @@ def write_runtime_status(
 ) -> None:
     """Persist gateway runtime health information for diagnostics/status."""
     path = _get_runtime_status_path()
-    payload = _read_json_file(path) or _build_runtime_status_record()
+    payload = _prune_unknown_runtime_platforms(
+        _read_json_file(path) or _build_runtime_status_record()
+    )
     payload.setdefault("platforms", {})
     payload.setdefault("kind", _GATEWAY_KIND)
     payload["pid"] = os.getpid()

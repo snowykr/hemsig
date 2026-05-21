@@ -52,6 +52,7 @@ from gateway.platforms.signal_rate_limit import (
 )
 
 logger = logging.getLogger(__name__)
+_IS_WINDOWS = os.name == "nt"
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -215,7 +216,7 @@ class SignalAdapter(BasePlatformAdapter):
         self._account_normalized = self.account.strip()
 
         # Track recently sent message timestamps to prevent echo-back loops
-        # in Note to Self / self-chat mode (mirrors WhatsApp recentlySentIds)
+        # in Note to Self / self-chat mode.
         self._recent_sent_timestamps: set = set()
         self._max_recent_timestamps = 50
         # Signal increasingly exposes ACI/PNI UUIDs as stable recipient IDs.
@@ -1023,7 +1024,7 @@ class SignalAdapter(BasePlatformAdapter):
         images: List[Tuple[str, str]],
         metadata: Optional[Dict[str, Any]] = None,
         human_delay: float = 0.0,
-    ) -> None:
+    ) -> SendResult:
         """Send a batch of images via chunked Signal RPC calls.
 
         Per-image alt texts are dropped — Signal's send RPC only carries
@@ -1033,7 +1034,7 @@ class SignalAdapter(BasePlatformAdapter):
         the rate-limit scheduler handles inter-batch pacing.
         """
         if not images:
-            return
+            return SendResult(success=True)
 
         scheduler = get_scheduler()
         logger.info(
@@ -1080,7 +1081,7 @@ class SignalAdapter(BasePlatformAdapter):
                 "(download=%d missing=%d oversize=%d)",
                 len(images), skipped_download, skipped_missing, skipped_oversize,
             )
-            return
+            return SendResult(success=False, error="No valid Signal images remained after validation")
 
         logger.info(
             "Signal send_multiple_images: %d/%d images valid, sending in chunks",
@@ -1101,6 +1102,7 @@ class SignalAdapter(BasePlatformAdapter):
             for i in range(0, len(attachments), SIGNAL_MAX_ATTACHMENTS_PER_MSG)
         ]
 
+        all_batches_sent = True
         for idx, att_batch in enumerate(att_batches):
             n = len(att_batch)
             estimated = scheduler.estimate_wait(n)
@@ -1134,6 +1136,7 @@ class SignalAdapter(BasePlatformAdapter):
                             attempt, SIGNAL_RATE_LIMIT_MAX_ATTEMPTS,
                         )
                     else:
+                        all_batches_sent = False
                         # Assume the server didn't accept the batch, don't deduce tokens
                         logger.error(
                             "Signal: RPC send failed for batch %d/%d (%d attachments, "
@@ -1155,6 +1158,7 @@ class SignalAdapter(BasePlatformAdapter):
                 except SignalRateLimitError as e:
                     scheduler.feedback(e.retry_after, n)
                     if attempt >= SIGNAL_RATE_LIMIT_MAX_ATTEMPTS:
+                        all_batches_sent = False
                         logger.error(
                             "Signal: rate-limit retries exhausted on batch %d/%d "
                             "(%d attachments lost, server retry_after=%s)",
@@ -1170,6 +1174,10 @@ class SignalAdapter(BasePlatformAdapter):
                         attempt, SIGNAL_RATE_LIMIT_MAX_ATTEMPTS,
                         f"{e.retry_after:.0f}s" if e.retry_after else "unknown",
                     )
+
+        if all_batches_sent:
+            return SendResult(success=True)
+        return SendResult(success=False, error="Signal image batches were not delivered")
 
     async def _notify_batch_pacing(
         self,

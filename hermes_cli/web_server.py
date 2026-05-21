@@ -555,10 +555,21 @@ async def get_status():
         gateway_state = runtime.get("gateway_state")
         gateway_platforms = runtime.get("platforms") or {}
         if configured_gateway_platforms is not None:
+            builtin_platforms = {
+                "local",
+                "telegram",
+                "discord",
+                "slack",
+                "signal",
+                "homeassistant",
+                "email",
+                "api_server",
+                "webhook",
+            }
             gateway_platforms = {
                 key: value
                 for key, value in gateway_platforms.items()
-                if key in configured_gateway_platforms
+                if key in configured_gateway_platforms or key not in builtin_platforms
             }
         gateway_exit_reason = runtime.get("exit_reason")
         gateway_updated_at = runtime.get("updated_at")

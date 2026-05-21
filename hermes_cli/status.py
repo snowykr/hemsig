@@ -371,19 +371,12 @@ def show_status(args):
     platforms = {
         "Telegram": ("TELEGRAM_BOT_TOKEN", "TELEGRAM_HOME_CHANNEL"),
         "Discord": ("DISCORD_BOT_TOKEN", "DISCORD_HOME_CHANNEL"),
-        "WhatsApp": ("WHATSAPP_ENABLED", None),
         "Signal": ("SIGNAL_HTTP_URL", "SIGNAL_HOME_CHANNEL"),
         "Slack": ("SLACK_BOT_TOKEN", None),
         "Email": ("EMAIL_ADDRESS", "EMAIL_HOME_ADDRESS"),
-        "SMS": ("TWILIO_ACCOUNT_SID", "SMS_HOME_CHANNEL"),
-        "DingTalk": ("DINGTALK_CLIENT_ID", None),
-        "Feishu": ("FEISHU_APP_ID", "FEISHU_HOME_CHANNEL"),
-        "WeCom": ("WECOM_BOT_ID", "WECOM_HOME_CHANNEL"),
-        "WeCom Callback": ("WECOM_CALLBACK_CORP_ID", None),
-        "Weixin": ("WEIXIN_ACCOUNT_ID", "WEIXIN_HOME_CHANNEL"),
-        "BlueBubbles": ("BLUEBUBBLES_SERVER_URL", "BLUEBUBBLES_HOME_CHANNEL"),
-        "QQBot": ("QQ_APP_ID", "QQ_HOME_CHANNEL"),
-        "Yuanbao": ("YUANBAO_APP_ID", "YUANBAO_HOME_CHANNEL"),
+        "Home Assistant": ("HASS_TOKEN", None),
+        "Webhook": ("WEBHOOK_ENABLED", None),
+        "API Server": ("API_SERVER_ENABLED", None),
     }
 
     for name, (token_var, home_var) in platforms.items():
@@ -393,9 +386,6 @@ def show_status(args):
         home_channel = ""
         if home_var:
             home_channel = os.getenv(home_var, "")
-        # Back-compat: QQBot home channel was renamed from QQ_HOME_CHANNEL to QQBOT_HOME_CHANNEL
-        if not home_channel and home_var == "QQBOT_HOME_CHANNEL":
-            home_channel = os.getenv("QQ_HOME_CHANNEL", "")
         
         status = "configured" if has_token else "not configured"
         if home_channel:
@@ -405,10 +395,13 @@ def show_status(args):
 
     # Plugin-registered platforms
     try:
+        import hermes_cli.gateway as gateway_mod
         from gateway.platform_registry import platform_registry
         for entry in platform_registry.plugin_entries():
-            configured = entry.check_fn()
-            status_str = "configured" if configured else "not configured"
+            status_str = gateway_mod._platform_status(
+                {"key": entry.name, "label": entry.label, "_registry_entry": entry}
+            )
+            configured = status_str == "configured"
             label = entry.label
             print(f"  {label:<12}  {check_mark(configured)} {status_str} (plugin)")
     except Exception:
@@ -426,7 +419,10 @@ def show_status(args):
         snapshot = get_gateway_runtime_snapshot()
         is_running = snapshot.running
         print(f"  Status:       {check_mark(is_running)} {'running' if is_running else 'stopped'}")
-        print(f"  Manager:      {snapshot.manager}")
+        if _is_termux():
+            print("  Manager:      Termux / manual process")
+        else:
+            print(f"  Manager:      {snapshot.manager}")
         if snapshot.gateway_pids:
             print(f"  PID(s):       {_format_gateway_pids(snapshot.gateway_pids)}")
         if snapshot.has_process_service_mismatch:
@@ -440,6 +436,8 @@ def show_status(args):
         if _is_termux():
             print(f"  Status:       {color('unknown', Colors.DIM)}")
             print("  Manager:      Termux / manual process")
+            print("  Start with:   hermes gateway")
+            print("  Note:         Android may stop background jobs when Termux is suspended")
         elif sys.platform.startswith('linux'):
             print(f"  Status:       {color('unknown', Colors.DIM)}")
             print("  Manager:      systemd/manual")

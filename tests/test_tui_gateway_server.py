@@ -1936,6 +1936,7 @@ def test_input_detect_drop_attaches_image(monkeypatch):
     assert resp["result"]["matched"] is True
     assert resp["result"]["is_image"] is True
     assert resp["result"]["text"] == "[User attached image: cat.png]"
+    assert server._sessions["sid"]["attached_images"] == []
 
 
 def test_input_detect_drop_path_with_spaces(tmp_path):
@@ -1958,9 +1959,7 @@ def test_input_detect_drop_path_with_spaces(tmp_path):
     assert resp["result"]["is_image"] is True
     assert resp["result"]["path"] == str(img)
     assert resp["result"]["text"] == f"[User attached image: {img.name}]"
-    # Verify attachment was recorded in the session
-    assert len(server._sessions["sid"]["attached_images"]) == 1
-    assert server._sessions["sid"]["attached_images"][0] == str(img)
+    assert server._sessions["sid"]["attached_images"] == []
 
 
 def test_input_detect_drop_path_with_spaces_and_remainder(tmp_path):
@@ -1984,7 +1983,7 @@ def test_input_detect_drop_path_with_spaces_and_remainder(tmp_path):
     assert resp["result"]["path"] == str(img)
     # Remainder becomes the text sent to the model
     assert resp["result"]["text"] == "describe this image"
-    assert server._sessions["sid"]["attached_images"][0] == str(img)
+    assert server._sessions["sid"]["attached_images"] == []
 
 
 def test_rollback_restore_resolves_number_and_file_path():

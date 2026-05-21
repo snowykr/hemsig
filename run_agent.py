@@ -1014,7 +1014,7 @@ class AIAgent:
                 NOTE: Anthropic Sonnet 4.6+ and Opus 4.6+ reject a conversation that ends on an
                 assistant-role message (400 error).  For those models use structured outputs or
                 output_config.format instead of a trailing-assistant prefill.
-            platform (str): The interface platform the user is on (e.g. "cli", "telegram", "discord", "whatsapp").
+            platform (str): The interface platform the user is on (e.g. "cli", "telegram", "discord", "slack").
                 Used to inject platform-specific formatting hints into the system prompt.
             skip_context_files (bool): If True, skip auto-injection of SOUL.md, AGENTS.md, and .cursorrules
                 into the system prompt. Use this for batch processing and data generation to avoid
@@ -1035,7 +1035,7 @@ class AIAgent:
         self.verbose_logging = verbose_logging
         self.quiet_mode = quiet_mode
         self.ephemeral_system_prompt = ephemeral_system_prompt
-        self.platform = platform  # "cli", "telegram", "discord", "whatsapp", etc.
+        self.platform = platform  # "cli", "telegram", "discord", "slack", etc.
         self._user_id = user_id  # Platform user identifier (gateway sessions)
         self._user_name = user_name
         self._chat_id = chat_id
@@ -1443,7 +1443,7 @@ class AIAgent:
                 effective_base = base_url
                 if base_url_host_matches(effective_base, "openrouter.ai"):
                     client_kwargs["default_headers"] = {
-                        "HTTP-Referer": "https://hermes-agent.nousresearch.com",
+                        "HTTP-Referer": "https://github.com/NousResearch/hermes-agent",
                         "X-OpenRouter-Title": "Hermes Agent",
                         "X-OpenRouter-Categories": "productivity,cli-agent",
                     }

@@ -6,6 +6,8 @@ import types
 
 import pytest
 
+from gateway.config import GatewayConfig, Platform, PlatformConfig
+from gateway.platform_registry import PlatformEntry, platform_registry
 from hermes_cli.auth import get_active_provider
 from hermes_cli.config import load_config, save_config
 from hermes_cli import setup as setup_mod
@@ -164,13 +166,8 @@ def test_setup_gateway_skips_service_install_when_systemctl_missing(monkeypatch,
         "DISCORD_HOME_CHANNEL": "",
         "SLACK_BOT_TOKEN": "",
         "SLACK_HOME_CHANNEL": "",
-        "MATRIX_HOMESERVER": "https://matrix.example.com",
-        "MATRIX_USER_ID": "@alice:example.com",
-        "MATRIX_PASSWORD": "",
-        "MATRIX_ACCESS_TOKEN": "token",
-        "BLUEBUBBLES_SERVER_URL": "",
-        "BLUEBUBBLES_HOME_CHANNEL": "",
-        "WHATSAPP_ENABLED": "",
+        "SIGNAL_HTTP_URL": "http://signal.example.com",
+        "SIGNAL_ACCOUNT": "+15555550123",
         "WEBHOOK_ENABLED": "",
     }
 
@@ -203,13 +200,8 @@ def test_setup_gateway_in_container_shows_docker_guidance(monkeypatch, capsys):
         "DISCORD_HOME_CHANNEL": "",
         "SLACK_BOT_TOKEN": "",
         "SLACK_HOME_CHANNEL": "",
-        "MATRIX_HOMESERVER": "https://matrix.example.com",
-        "MATRIX_USER_ID": "@alice:example.com",
-        "MATRIX_PASSWORD": "",
-        "MATRIX_ACCESS_TOKEN": "token",
-        "BLUEBUBBLES_SERVER_URL": "",
-        "BLUEBUBBLES_HOME_CHANNEL": "",
-        "WHATSAPP_ENABLED": "",
+        "SIGNAL_HTTP_URL": "http://signal.example.com",
+        "SIGNAL_ACCOUNT": "+15555550123",
         "WEBHOOK_ENABLED": "",
     }
 
@@ -235,6 +227,66 @@ def test_setup_gateway_in_container_shows_docker_guidance(monkeypatch, capsys):
     assert "Messaging platforms configured!" in out
     assert "docker" in out.lower() or "Docker" in out
     assert "restart" in out.lower()
+
+
+def test_fallback_gateway_platforms_only_include_supported_handlers():
+    keys = [platform["key"] for platform in setup_mod._RETAINED_GATEWAY_PLATFORMS]
+    assert keys == [
+        "telegram",
+        "discord",
+        "slack",
+        "signal",
+        "email",
+        "homeassistant",
+        "webhook",
+        "api_server",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("key", "helper_name"),
+    [
+        ("signal", "_fallback_setup_signal"),
+        ("email", "_fallback_setup_email"),
+        ("homeassistant", "_fallback_setup_homeassistant"),
+        ("api_server", "_fallback_setup_api_server"),
+    ],
+)
+def test_fallback_gateway_platform_dispatches_supported_builtins(monkeypatch, key, helper_name):
+    called = []
+    monkeypatch.setattr(setup_mod, helper_name, lambda: called.append(helper_name))
+
+    label = next(platform["label"] for platform in setup_mod._RETAINED_GATEWAY_PLATFORMS if platform["key"] == key)
+    setup_mod._fallback_configure_gateway_platform({"key": key, "label": label})
+
+    assert called == [helper_name]
+
+
+def test_plugin_platform_status_uses_config_readiness(monkeypatch):
+    import hermes_cli.gateway as gateway_mod
+
+    entry = PlatformEntry(
+        name="plugchat",
+        label="Plug Chat",
+        adapter_factory=lambda cfg: None,
+        check_fn=lambda: True,
+        validate_config=lambda cfg: bool(cfg.extra.get("server")),
+        source="plugin",
+    )
+    platform_registry.register(entry)
+    try:
+        monkeypatch.setattr(
+            "gateway.config.load_gateway_config",
+            lambda: GatewayConfig(
+                platforms={Platform("plugchat"): PlatformConfig(enabled=True, extra={})}
+            ),
+        )
+        status = gateway_mod._platform_status(
+            {"key": "plugchat", "label": "Plug Chat", "_registry_entry": entry}
+        )
+        assert status == "not configured"
+    finally:
+        platform_registry.unregister("plugchat")
 
 
 def test_setup_syncs_custom_provider_removal_from_disk(tmp_path, monkeypatch):

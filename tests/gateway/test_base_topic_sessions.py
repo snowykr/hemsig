@@ -194,6 +194,86 @@ class TestBasePlatformTopicSessions:
         ]
 
     @pytest.mark.asyncio
+    async def test_process_message_background_surfaces_image_batch_failure(self):
+        adapter = DummyTelegramAdapter()
+
+        async def handler(_event):
+            await asyncio.sleep(0)
+            return "ack\nMEDIA:/tmp/failure.png"
+
+        async def failing_batch(*_args, **_kwargs):
+            return SendResult(success=False, error="image batch failed")
+
+        async def hold_typing(_chat_id, interval=2.0, metadata=None):
+            await asyncio.Event().wait()
+
+        adapter.set_message_handler(handler)
+        adapter.send_multiple_images = failing_batch
+        adapter._keep_typing = hold_typing
+
+        event = _make_event("-1001", "17585")
+        await adapter._process_message_background(event, build_session_key(event.source))
+
+        assert adapter.sent == [
+            {
+                "chat_id": "-1001",
+                "content": "ack",
+                "reply_to": "1",
+                "metadata": {"thread_id": "17585"},
+            },
+            {
+                "chat_id": "-1001",
+                "content": "⚠️ Some image attachments could not be delivered. Please try again — your request was processed but one or more images could not be uploaded.",
+                "reply_to": "1",
+                "metadata": {"thread_id": "17585"},
+            },
+        ]
+        assert adapter.processing_hooks == [
+            ("start", "1"),
+            ("complete", "1", ProcessingOutcome.FAILURE),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_process_message_background_surfaces_document_failure(self):
+        adapter = DummyTelegramAdapter()
+
+        async def handler(_event):
+            await asyncio.sleep(0)
+            return "ack\nMEDIA:/tmp/report.pdf"
+
+        async def failing_document(*_args, **_kwargs):
+            return SendResult(success=False, error="document upload failed")
+
+        async def hold_typing(_chat_id, interval=2.0, metadata=None):
+            await asyncio.Event().wait()
+
+        adapter.set_message_handler(handler)
+        adapter.send_document = failing_document
+        adapter._keep_typing = hold_typing
+
+        event = _make_event("-1001", "17585")
+        await adapter._process_message_background(event, build_session_key(event.source))
+
+        assert adapter.sent == [
+            {
+                "chat_id": "-1001",
+                "content": "ack",
+                "reply_to": "1",
+                "metadata": {"thread_id": "17585"},
+            },
+            {
+                "chat_id": "-1001",
+                "content": "⚠️ Some file attachments could not be delivered. Please try again — your request was processed but one or more attachments could not be uploaded.",
+                "reply_to": "1",
+                "metadata": {"thread_id": "17585"},
+            },
+        ]
+        assert adapter.processing_hooks == [
+            ("start", "1"),
+            ("complete", "1", ProcessingOutcome.FAILURE),
+        ]
+
+    @pytest.mark.asyncio
     async def test_process_message_background_marks_cancellation_unsuccessful(self):
         adapter = DummyTelegramAdapter()
         release = asyncio.Event()

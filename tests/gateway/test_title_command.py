@@ -167,7 +167,7 @@ class TestHandleTitleCommand:
 
     @pytest.mark.asyncio
     async def test_works_across_platforms(self, tmp_path):
-        """The /title command works for Discord, Slack, and WhatsApp too."""
+        """The /title command works for Discord, Slack, and Telegram too."""
         from hermes_state import SessionDB
         for platform in [Platform.DISCORD, Platform.TELEGRAM]:
             db = SessionDB(db_path=tmp_path / f"state_{platform.value}.db")

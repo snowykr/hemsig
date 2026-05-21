@@ -1,7 +1,7 @@
 """
 Base platform adapter interface.
 
-All platform adapters (Telegram, Discord, WhatsApp) inherit from this
+All platform adapters (Telegram, Discord, Slack, Signal, etc.) inherit from this
 and implement the required methods.
 """
 
@@ -361,8 +361,8 @@ def proxy_kwargs_for_aiohttp(proxy_url: str | None) -> tuple[dict, dict]:
       - None → ``({}, {})``.
 
     Prefer the connector path: it works transparently with libraries
-    (like mautrix) that call ``session.request()`` without forwarding
-    per-request ``proxy=`` kwargs.
+    that call ``session.request()`` without forwarding per-request
+    ``proxy=`` kwargs.
 
     Usage::
 
@@ -1454,8 +1454,8 @@ class BasePlatformAdapter(ABC):
     # Default: the adapter treats ``finalize=True`` on edit_message as a
     # no-op and is happy to have the stream consumer skip redundant final
     # edits.  Subclasses that *require* an explicit finalize call to close
-    # out the message lifecycle (e.g. rich card / AI assistant surfaces
-    # such as DingTalk AI Cards) override this to True (class attribute or
+    # out the message lifecycle (e.g. specialized rich card / AI assistant
+    # surfaces) override this to True (class attribute or
     # property) so the stream consumer knows not to short-circuit.
     REQUIRES_EDIT_FINALIZE: bool = False
 
@@ -1473,12 +1473,12 @@ class BasePlatformAdapter(ABC):
         sending a new message.
 
         ``finalize`` signals that this is the last edit in a streaming
-        sequence.  Most platforms (Telegram, Slack, Discord, Matrix,
+        sequence.  Most platforms (Telegram, Slack, Discord, Signal,
         etc.) treat it as a no-op because their edit APIs have no notion
-        of message lifecycle state — an edit is an edit.  Platforms that
+        of message lifecycle state — an edit is an edit. Platforms that
         render streaming updates with a distinct "in progress" state and
-        require explicit closure (e.g. rich card / AI assistant surfaces
-        such as DingTalk AI Cards) use it to finalize the message and
+        require explicit closure (e.g. specialized rich card / AI assistant
+        surfaces) use it to finalize the message and
         transition the UI out of the streaming indicator — those should
         also set ``REQUIRES_EDIT_FINALIZE = True`` so callers route a
         final edit through even when content is unchanged.  Callers
@@ -1585,7 +1585,7 @@ class BasePlatformAdapter(ABC):
         invalidates the provider prompt cache.
 
         Platforms with inline-button support (Telegram, Discord, Slack,
-        Matrix, Feishu) should override this to render three buttons:
+        and similar adapters) should override this to render three buttons:
         Approve Once / Always Approve / Cancel.  Button callbacks MUST be
         routed back through the gateway by calling
         ``GatewayRunner._resolve_slash_confirm(confirm_id, choice)`` where
@@ -1645,7 +1645,7 @@ class BasePlatformAdapter(ABC):
         images: List[Tuple[str, str]],
         metadata: Optional[Dict[str, Any]] = None,
         human_delay: float = 0.0,
-    ) -> None:
+    ) -> Optional[SendResult]:
         """Send a batch of images.
 
         Accepts ``http(s)://``, ``file://`` URIs in the first tuple
@@ -1656,9 +1656,14 @@ class BasePlatformAdapter(ABC):
         files through ``send_image_file``.
 
         Override in subclasses to bundle into a single native API call
-        (e.g. Signal's multi-attachment RPC)
+        (e.g. Signal's multi-attachment RPC). Implementations may return
+        a ``SendResult`` when callers need success/failure semantics for the
+        whole batch; callers that do not care can ignore the return value.
         """
         from urllib.parse import unquote as _unquote
+
+        had_failure = False
+        last_error: str | None = None
 
         for image_url, alt_text in images:
             if human_delay > 0:
@@ -1692,9 +1697,16 @@ class BasePlatformAdapter(ABC):
                         metadata=metadata,
                     )
                 if not img_result.success:
+                    had_failure = True
+                    last_error = img_result.error or "Image delivery failed"
                     logger.error("[%s] Failed to send image: %s", self.name, img_result.error)
             except Exception as img_err:
+                had_failure = True
+                last_error = str(img_err)
                 logger.error("[%s] Error sending image: %s", self.name, img_err, exc_info=True)
+        if had_failure:
+            return SendResult(success=False, error=last_error or "Image delivery failed")
+        return SendResult(success=True)
 
     async def send_image(
         self,
@@ -2671,6 +2683,8 @@ class BasePlatformAdapter(ABC):
         # Track delivery outcomes for the processing-complete hook
         delivery_attempted = False
         delivery_succeeded = False
+        attachment_delivery_failed = False
+        attachment_notice_sent = False
 
         def _record_delivery(result):
             nonlocal delivery_attempted, delivery_succeeded
@@ -2679,6 +2693,35 @@ class BasePlatformAdapter(ABC):
             delivery_attempted = True
             if getattr(result, "success", False):
                 delivery_succeeded = True
+
+        async def _notify_attachment_delivery_failure(kind: str = "image", error_text: str | None = None) -> None:
+            nonlocal attachment_notice_sent
+            if attachment_notice_sent:
+                return
+            attachment_notice_sent = True
+            if kind == "image":
+                notice = (
+                    "⚠️ Some image attachments could not be delivered. "
+                    "Please try again — your request was processed but one or more images could not be uploaded."
+                )
+                log_label = "Image"
+            else:
+                notice = (
+                    "⚠️ Some file attachments could not be delivered. "
+                    "Please try again — your request was processed but one or more attachments could not be uploaded."
+                )
+                log_label = "File"
+            if error_text:
+                logger.warning("[%s] %s attachment delivery failure: %s", self.name, log_label, error_text)
+            try:
+                await self.send(
+                    chat_id=event.source.chat_id,
+                    content=notice,
+                    reply_to=event.message_id,
+                    metadata=_thread_metadata,
+                )
+            except Exception as notify_err:
+                logger.debug("[%s] Could not send attachment-delivery notice: %s", self.name, notify_err)
 
         # Reuse the interrupt event set by handle_message() (which marks
         # the session active before spawning this task to prevent races).
@@ -2837,14 +2880,19 @@ class BasePlatformAdapter(ABC):
                 if images:
                     logger.info("[%s] Extracted %d image(s) to send as attachments", self.name, len(images))
                     try:
-                        await self.send_multiple_images(
+                        image_result = await self.send_multiple_images(
                             chat_id=event.source.chat_id,
                             images=images,
                             metadata=_thread_metadata,
                             human_delay=human_delay,
                         )
+                        if image_result is not None and not image_result.success:
+                            attachment_delivery_failed = True
+                            await _notify_attachment_delivery_failure("image", image_result.error)
                     except Exception as batch_err:
+                        attachment_delivery_failed = True
                         logger.warning("[%s] Error batching images: %s", self.name, batch_err, exc_info=True)
+                        await _notify_attachment_delivery_failure("image", str(batch_err))
 
 
                 # Send extracted media files — route by file type
@@ -2872,14 +2920,19 @@ class BasePlatformAdapter(ABC):
                 if _image_paths:
                     try:
                         _batch = [(f"file://{_quote(p)}", "") for p in _image_paths]
-                        await self.send_multiple_images(
+                        image_result = await self.send_multiple_images(
                             chat_id=event.source.chat_id,
                             images=_batch,
                             metadata=_thread_metadata,
                             human_delay=human_delay,
                         )
+                        if image_result is not None and not image_result.success:
+                            attachment_delivery_failed = True
+                            await _notify_attachment_delivery_failure("image", image_result.error)
                     except Exception as batch_err:
+                        attachment_delivery_failed = True
                         logger.warning("[%s] Error batching images: %s", self.name, batch_err, exc_info=True)
+                        await _notify_attachment_delivery_failure("image", str(batch_err))
 
                 for media_path, is_voice in _non_image_media:
                     if human_delay > 0:
@@ -2906,9 +2959,13 @@ class BasePlatformAdapter(ABC):
                             )
 
                         if not media_result.success:
+                            attachment_delivery_failed = True
                             logger.warning("[%s] Failed to send media (%s): %s", self.name, ext, media_result.error)
+                            await _notify_attachment_delivery_failure("file", media_result.error)
                     except Exception as media_err:
+                        attachment_delivery_failed = True
                         logger.warning("[%s] Error sending media: %s", self.name, media_err)
+                        await _notify_attachment_delivery_failure("file", str(media_err))
 
                 # Send auto-detected local non-image files as native attachments
                 for file_path in _non_image_local:
@@ -2917,22 +2974,30 @@ class BasePlatformAdapter(ABC):
                     try:
                         ext = Path(file_path).suffix.lower()
                         if ext in _VIDEO_EXTS:
-                            await self.send_video(
+                            file_result = await self.send_video(
                                 chat_id=event.source.chat_id,
                                 video_path=file_path,
                                 metadata=_thread_metadata,
                             )
                         else:
-                            await self.send_document(
+                            file_result = await self.send_document(
                                 chat_id=event.source.chat_id,
                                 file_path=file_path,
                                 metadata=_thread_metadata,
                             )
+                        if not file_result.success:
+                            attachment_delivery_failed = True
+                            logger.warning("[%s] Failed to send local file (%s): %s", self.name, ext, file_result.error)
+                            await _notify_attachment_delivery_failure("file", file_result.error)
                     except Exception as file_err:
+                        attachment_delivery_failed = True
                         logger.error("[%s] Error sending local file %s: %s", self.name, file_path, file_err)
+                        await _notify_attachment_delivery_failure("file", str(file_err))
 
             # Determine overall success for the processing hook
             processing_ok = delivery_succeeded if delivery_attempted else not bool(response)
+            if attachment_delivery_failed:
+                processing_ok = False
             await self._run_processing_hook(
                 "on_processing_complete",
                 event,
