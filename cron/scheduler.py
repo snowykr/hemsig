@@ -40,6 +40,8 @@ from hermes_time import now as _hermes_now
 
 logger = logging.getLogger(__name__)
 
+_hermes_home = get_hermes_home()
+
 
 def _resolve_cron_enabled_toolsets(job: dict, cfg: dict) -> list[str] | None:
     """Resolve the toolset list for a cron job.
@@ -74,38 +76,25 @@ def _resolve_cron_enabled_toolsets(job: dict, cfg: dict) -> list[str] | None:
 # Valid delivery platforms — used to validate user-supplied platform names
 # in cron delivery targets, preventing env var enumeration via crafted names.
 _KNOWN_DELIVERY_PLATFORMS = frozenset({
-    "telegram", "discord", "slack", "whatsapp", "signal",
-    "matrix", "mattermost", "homeassistant", "dingtalk", "feishu",
-    "wecom", "wecom_callback", "weixin", "sms", "email", "webhook", "bluebubbles",
-    "qqbot", "yuanbao",
+    "telegram", "discord", "slack", "signal",
+    "homeassistant", "email",
 })
 
 # Platforms that support a configured cron/notification home target, mapped to
 # the environment variable used by gateway setup/runtime config.
 _HOME_TARGET_ENV_VARS = {
-    "matrix": "MATRIX_HOME_ROOM",
     "telegram": "TELEGRAM_HOME_CHANNEL",
     "discord": "DISCORD_HOME_CHANNEL",
     "slack": "SLACK_HOME_CHANNEL",
     "signal": "SIGNAL_HOME_CHANNEL",
-    "mattermost": "MATTERMOST_HOME_CHANNEL",
-    "sms": "SMS_HOME_CHANNEL",
     "email": "EMAIL_HOME_ADDRESS",
-    "dingtalk": "DINGTALK_HOME_CHANNEL",
-    "feishu": "FEISHU_HOME_CHANNEL",
-    "wecom": "WECOM_HOME_CHANNEL",
-    "weixin": "WEIXIN_HOME_CHANNEL",
-    "bluebubbles": "BLUEBUBBLES_HOME_CHANNEL",
-    "qqbot": "QQBOT_HOME_CHANNEL",
 }
 
 # Legacy env var names kept for back-compat.  Each entry is the current
 # primary env var → the previous name.  _get_home_target_chat_id falls
 # back to the legacy name if the primary is unset, so users who set the
 # old name before the rename keep working until they migrate.
-_LEGACY_HOME_TARGET_ENV_VARS = {
-    "QQBOT_HOME_CHANNEL": "QQ_HOME_CHANNEL",
-}
+_LEGACY_HOME_TARGET_ENV_VARS = {}
 
 from cron.jobs import get_due_jobs, mark_job_run, save_job_output, advance_next_run
 
@@ -114,12 +103,19 @@ from cron.jobs import get_due_jobs, mark_job_run, save_job_output, advance_next_
 # locally for audit.
 SILENT_MARKER = "[SILENT]"
 
-# Resolve Hermes home directory (respects HERMES_HOME override)
-_hermes_home = get_hermes_home()
+def _tick_lock_paths():
+    """Return the current profile's cron tick lock paths."""
+    if _LOCK_DIR != _INITIAL_LOCK_DIR or _LOCK_FILE != _INITIAL_LOCK_FILE:
+        return _LOCK_DIR, _LOCK_FILE
+    lock_dir = get_hermes_home() / "cron"
+    return lock_dir, lock_dir / ".tick.lock"
 
-# File-based lock prevents concurrent ticks from gateway + daemon + systemd timer
+
+_hermes_home = get_hermes_home()
 _LOCK_DIR = _hermes_home / "cron"
 _LOCK_FILE = _LOCK_DIR / ".tick.lock"
+_INITIAL_LOCK_DIR = _LOCK_DIR
+_INITIAL_LOCK_FILE = _LOCK_FILE
 
 
 def _resolve_origin(job: dict) -> Optional[dict]:
@@ -253,6 +249,58 @@ def _normalize_deliver_value(deliver) -> str:
     return str(deliver)
 
 
+def _unsupported_delivery_platform_error(platform_name: str) -> Optional[str]:
+    """Return a human-readable error for platforms that cannot receive cron output."""
+    normalized = str(platform_name or "").strip().lower()
+    if not normalized:
+        return None
+    from tools.send_message_tool import _UNSUPPORTED_SEND_MESSAGE_OUTBOUND_PLATFORMS
+
+    if normalized in _UNSUPPORTED_SEND_MESSAGE_OUTBOUND_PLATFORMS:
+        return f"platform {normalized} is not supported for cron delivery"
+    return None
+
+
+def _validate_cron_delivery_value(deliver, *, origin: Optional[dict] = None) -> Optional[str]:
+    """Validate a cron ``deliver`` value for outbound delivery semantics.
+
+    This guards new create/update requests and also gives existing persisted jobs
+    a clear runtime error when they still target removed or unsupported platforms.
+    """
+    normalized = _normalize_deliver_value(deliver)
+    if normalized == "local":
+        return None
+
+    parts = [p.strip() for p in normalized.split(",") if p.strip()]
+    for part in parts:
+        if part == "origin":
+            origin_platform = (origin or {}).get("platform")
+            if origin_platform:
+                try:
+                    from gateway.config import Platform
+
+                    Platform(str(origin_platform).strip().lower())
+                except (ImportError, ValueError, KeyError):
+                    return f"origin unknown platform '{origin_platform}'"
+                error = _unsupported_delivery_platform_error(str(origin_platform))
+                if error:
+                    return f"origin {error}"
+            continue
+
+        platform_name = part.split(":", 1)[0].strip().lower()
+        error = _unsupported_delivery_platform_error(platform_name)
+        if error:
+            return error
+        try:
+            from gateway.config import Platform
+
+            Platform(platform_name)
+        except (ImportError, ValueError, KeyError):
+            return f"unknown platform '{platform_name}'"
+
+    return None
+
+
 def _resolve_delivery_targets(job: dict) -> List[dict]:
     """Resolve all concrete auto-delivery targets for a cron job (supports comma-separated deliver)."""
     deliver = _normalize_deliver_value(job.get("deliver", "local"))
@@ -335,12 +383,20 @@ def _deliver_result(job: dict, content: str, adapters=None, loop=None) -> Option
     Deliver job output to the configured target(s) (origin chat, specific platform, etc.).
 
     When ``adapters`` and ``loop`` are provided (gateway is running), tries to
-    use the live adapter first — this supports E2EE rooms (e.g. Matrix) where
+    use the live adapter first — this supports adapters that need gateway-managed
     the standalone HTTP path cannot encrypt.  Falls back to standalone send if
     the adapter path fails or is unavailable.
 
     Returns None on success, or an error string on failure.
     """
+    validation_error = _validate_cron_delivery_value(
+        job.get("deliver", "local"),
+        origin=_resolve_origin(job),
+    )
+    if validation_error:
+        logger.warning("Job '%s': %s", job["id"], validation_error)
+        return validation_error
+
     targets = _resolve_delivery_targets(job)
     if not targets:
         if job.get("deliver", "local") != "local":
@@ -425,8 +481,8 @@ def _deliver_result(job: dict, content: str, adapters=None, loop=None) -> Option
             delivery_errors.append(msg)
             continue
 
-        # Prefer the live adapter when the gateway is running — this supports E2EE
-        # rooms (e.g. Matrix) where the standalone HTTP path cannot encrypt.
+        # Prefer the live adapter when the gateway is running — this supports
+        # adapters whose delivery must flow through the gateway process.
         runtime_adapter = (adapters or {}).get(platform)
         delivered = False
         if runtime_adapter is not None and loop is not None and getattr(loop, "is_running", lambda: False)():
@@ -865,6 +921,7 @@ def run_job(job: dict) -> tuple[bool, str, str, Optional[str]]:
         "HERMES_CRON_AUTO_DELIVER_PLATFORM",
         "HERMES_CRON_AUTO_DELIVER_CHAT_ID",
         "HERMES_CRON_AUTO_DELIVER_THREAD_ID",
+        "HERMES_CRON_AUTO_DELIVER_TARGETS",
     )
     for _var_name in _cron_delivery_vars:
         _VAR_MAP[_var_name].set("")
@@ -902,7 +959,8 @@ def run_job(job: dict) -> tuple[bool, str, str, Optional[str]]:
         except UnicodeDecodeError:
             load_dotenv(str(_hermes_home / ".env"), override=True, encoding="latin-1")
 
-        delivery_target = _resolve_delivery_target(job)
+        delivery_targets = _resolve_delivery_targets(job)
+        delivery_target = delivery_targets[0] if delivery_targets else None
         if delivery_target:
             _VAR_MAP["HERMES_CRON_AUTO_DELIVER_PLATFORM"].set(delivery_target["platform"])
             _VAR_MAP["HERMES_CRON_AUTO_DELIVER_CHAT_ID"].set(str(delivery_target["chat_id"]))
@@ -911,6 +969,7 @@ def run_job(job: dict) -> tuple[bool, str, str, Optional[str]]:
                 if delivery_target.get("thread_id") is None
                 else str(delivery_target["thread_id"])
             )
+            _VAR_MAP["HERMES_CRON_AUTO_DELIVER_TARGETS"].set(json.dumps(delivery_targets))
 
         model = job.get("model") or os.getenv("HERMES_MODEL") or ""
 
@@ -1270,12 +1329,13 @@ def tick(verbose: bool = True, adapters=None, loop=None) -> int:
     Returns:
         Number of jobs executed (0 if another tick is already running)
     """
-    _LOCK_DIR.mkdir(parents=True, exist_ok=True)
+    lock_dir, lock_file = _tick_lock_paths()
+    lock_dir.mkdir(parents=True, exist_ok=True)
 
     # Cross-platform file locking: fcntl on Unix, msvcrt on Windows
     lock_fd = None
     try:
-        lock_fd = open(_LOCK_FILE, "w")
+        lock_fd = open(lock_file, "w")
         if fcntl:
             fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         elif msvcrt:

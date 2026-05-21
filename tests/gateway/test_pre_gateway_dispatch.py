@@ -18,23 +18,23 @@ from gateway.session import SessionSource
 def _clear_auth_env(monkeypatch) -> None:
     for key in (
         "TELEGRAM_ALLOWED_USERS",
-        "WHATSAPP_ALLOWED_USERS",
+        "SLACK_ALLOWED_USERS",
         "GATEWAY_ALLOWED_USERS",
         "TELEGRAM_ALLOW_ALL_USERS",
-        "WHATSAPP_ALLOW_ALL_USERS",
+        "SLACK_ALLOW_ALL_USERS",
         "GATEWAY_ALLOW_ALL_USERS",
     ):
         monkeypatch.delenv(key, raising=False)
 
 
-def _make_event(text: str = "hello", platform: Platform = Platform.WHATSAPP) -> MessageEvent:
+def _make_event(text: str = "hello", platform: Platform = Platform.SLACK) -> MessageEvent:
     return MessageEvent(
         text=text,
         message_id="m1",
         source=SessionSource(
             platform=platform,
-            user_id="15551234567@s.whatsapp.net",
-            chat_id="15551234567@s.whatsapp.net",
+            user_id="U123",
+            chat_id="U123",
             user_name="tester",
             chat_type="dm",
         ),
@@ -72,7 +72,7 @@ async def test_hook_skip_short_circuits_dispatch(monkeypatch):
 
     monkeypatch.setattr("hermes_cli.plugins.invoke_hook", _fake_hook)
 
-    runner, adapter = _make_runner(Platform.WHATSAPP)
+    runner, adapter = _make_runner(Platform.SLACK)
 
     result = await runner._handle_message(_make_event("hi"))
 
@@ -85,7 +85,7 @@ async def test_hook_skip_short_circuits_dispatch(monkeypatch):
 async def test_hook_rewrite_replaces_event_text(monkeypatch):
     """A plugin returning {'action': 'rewrite', 'text': ...} mutates event.text."""
     _clear_auth_env(monkeypatch)
-    monkeypatch.setenv("WHATSAPP_ALLOWED_USERS", "*")
+    monkeypatch.setenv("SLACK_ALLOWED_USERS", "*")
 
     seen_text = {}
 
@@ -100,7 +100,7 @@ async def test_hook_rewrite_replaces_event_text(monkeypatch):
 
     monkeypatch.setattr("hermes_cli.plugins.invoke_hook", _fake_hook)
 
-    runner, _adapter = _make_runner(Platform.WHATSAPP)
+    runner, _adapter = _make_runner(Platform.SLACK)
     runner._handle_message_with_agent = _capture  # noqa: SLF001
 
     await runner._handle_message(_make_event("original"))
@@ -113,7 +113,7 @@ async def test_hook_allow_falls_through_to_auth(monkeypatch):
     """A plugin returning {'action': 'allow'} continues to normal dispatch."""
     _clear_auth_env(monkeypatch)
     # No allowed users set → auth fails → pairing flow triggers.
-    monkeypatch.delenv("WHATSAPP_ALLOWED_USERS", raising=False)
+    monkeypatch.delenv("SLACK_ALLOWED_USERS", raising=False)
 
     def _fake_hook(name, **kwargs):
         if name == "pre_gateway_dispatch":
@@ -122,7 +122,7 @@ async def test_hook_allow_falls_through_to_auth(monkeypatch):
 
     monkeypatch.setattr("hermes_cli.plugins.invoke_hook", _fake_hook)
 
-    runner, adapter = _make_runner(Platform.WHATSAPP)
+    runner, adapter = _make_runner(Platform.SLACK)
     runner.pairing_store.generate_code.return_value = "12345"
 
     result = await runner._handle_message(_make_event("hi"))
@@ -136,14 +136,14 @@ async def test_hook_allow_falls_through_to_auth(monkeypatch):
 async def test_hook_exception_does_not_break_dispatch(monkeypatch):
     """A raising plugin hook does not break the gateway."""
     _clear_auth_env(monkeypatch)
-    monkeypatch.delenv("WHATSAPP_ALLOWED_USERS", raising=False)
+    monkeypatch.delenv("SLACK_ALLOWED_USERS", raising=False)
 
     def _fake_hook(name, **kwargs):
         raise RuntimeError("plugin blew up")
 
     monkeypatch.setattr("hermes_cli.plugins.invoke_hook", _fake_hook)
 
-    runner, _adapter = _make_runner(Platform.WHATSAPP)
+    runner, _adapter = _make_runner(Platform.SLACK)
     runner.pairing_store.generate_code.return_value = None
 
     # Should not raise; falls through to auth chain.
@@ -155,7 +155,7 @@ async def test_hook_exception_does_not_break_dispatch(monkeypatch):
 async def test_internal_events_bypass_hook(monkeypatch):
     """Internal events (event.internal=True) skip the plugin hook entirely."""
     _clear_auth_env(monkeypatch)
-    monkeypatch.setenv("WHATSAPP_ALLOWED_USERS", "*")
+    monkeypatch.setenv("SLACK_ALLOWED_USERS", "*")
 
     called = {"count": 0}
 
@@ -168,7 +168,7 @@ async def test_internal_events_bypass_hook(monkeypatch):
 
     monkeypatch.setattr("hermes_cli.plugins.invoke_hook", _fake_hook)
 
-    runner, _adapter = _make_runner(Platform.WHATSAPP)
+    runner, _adapter = _make_runner(Platform.SLACK)
     runner._handle_message_with_agent = _capture  # noqa: SLF001
 
     event = _make_event("hi")

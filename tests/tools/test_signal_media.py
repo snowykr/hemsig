@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, AsyncMock, patch
 import pytest
 
 from gateway.config import Platform
+from tools.send_message_tool import _send_to_platform
 
 
 def _make_httpx_mock():
@@ -36,9 +37,9 @@ def _make_httpx_mock():
             return MockResp()
 
     httpx_mock = ModuleType("httpx")
-    httpx_mock.AsyncClient = lambda timeout=None: MockClient()
-    httpx_mock.AsyncBaseTransport = AsyncBaseTransport  # Needed by Telegram adapter
-    httpx_mock.Proxy = Proxy  # Needed by telegram-bot library
+    setattr(httpx_mock, "AsyncClient", lambda timeout=None: MockClient())
+    setattr(httpx_mock, "AsyncBaseTransport", AsyncBaseTransport)  # Needed by Telegram adapter
+    setattr(httpx_mock, "Proxy", Proxy)  # Needed by telegram-bot library
     return httpx_mock
 
 
@@ -93,6 +94,88 @@ class TestSendSignalMediaFiles:
         assert "warnings" in result
         assert "Some media files were skipped" in str(result["warnings"])
 
+    def test_send_signal_uses_json_rpc_endpoint_and_payload(self):
+        from tools.send_message_tool import _send_signal
+
+        captured = {}
+
+        class MockResp:
+            def json(self):
+                return {"result": {"timestamp": 987654321}}
+
+            def raise_for_status(self):
+                pass
+
+        class MockClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *a):
+                pass
+
+            async def post(self, url, json):
+                captured["url"] = url
+                captured["json"] = json
+                return MockResp()
+
+        httpx_mock = ModuleType("httpx")
+        setattr(httpx_mock, "AsyncClient", lambda timeout=None: MockClient())
+        setattr(httpx_mock, "AsyncBaseTransport", type("AsyncBaseTransport", (), {}))
+        setattr(httpx_mock, "Proxy", type("Proxy", (), {}))
+        sys.modules["httpx"] = httpx_mock
+
+        extra = {"http_url": "http://localhost:8080", "account": "+155****4567"}
+        result = asyncio.run(_send_signal(extra, "+155****9999", "Hello world"))
+
+        assert result == {
+            "success": True,
+            "platform": "signal",
+            "chat_id": "+155****9999",
+            "message_id": 987654321,
+        }
+        assert captured["url"] == "http://localhost:8080/api/v1/rpc"
+        assert captured["json"] == {
+            "jsonrpc": "2.0",
+            "method": "send",
+            "params": {
+                "account": "+155****4567",
+                "message": "Hello world",
+                "recipient": ["+155****9999"],
+            },
+            "id": "send_message_tool_signal",
+        }
+
+    def test_send_signal_returns_error_for_json_rpc_error(self):
+        from tools.send_message_tool import _send_signal
+
+        class MockResp:
+            def json(self):
+                return {"error": {"message": "rate limited"}}
+
+            def raise_for_status(self):
+                pass
+
+        class MockClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *a):
+                pass
+
+            async def post(self, url, json):
+                return MockResp()
+
+        httpx_mock = ModuleType("httpx")
+        setattr(httpx_mock, "AsyncClient", lambda timeout=None: MockClient())
+        setattr(httpx_mock, "AsyncBaseTransport", type("AsyncBaseTransport", (), {}))
+        setattr(httpx_mock, "Proxy", type("Proxy", (), {}))
+        sys.modules["httpx"] = httpx_mock
+
+        extra = {"http_url": "http://localhost:8080", "account": "+155****4567"}
+        result = asyncio.run(_send_signal(extra, "+155****9999", "Hello world"))
+
+        assert result == {"error": "Signal RPC error: {'message': 'rate limited'}"}
+
 
 class TestSendSignalMediaRestrictions:
     """Test that the restriction block handles Signal media correctly."""
@@ -145,7 +228,9 @@ class TestSendSignalMediaRestrictions:
         )
 
         assert "error" in result
-        assert "only supported for" in result["error"]
+        error = result["error"]
+        assert isinstance(error, str)
+        assert "only supported for" in error
 
 
 class TestSendSignalMediaWarningMessages:
@@ -176,7 +261,9 @@ class TestSendSignalMediaWarningMessages:
 
         assert result.get("warnings") is not None
         # Check that the warning mentions signal as supported
-        found = any("signal" in w.lower() for w in result["warnings"])
+        warnings = result["warnings"]
+        assert isinstance(warnings, list)
+        found = any("signal" in str(w).lower() for w in warnings)
         assert found, f"Expected 'signal' in warnings but got: {result.get('warnings')}"
 
 
@@ -206,3 +293,149 @@ class TestSendSignalConfigLoading:
         """Platform.SIGNAL should be a valid platform."""
         assert hasattr(Platform, "SIGNAL")
         assert Platform.SIGNAL.value == "signal"
+
+
+class TestSendSignalStandaloneAdapterRouting:
+    def test_send_to_platform_routes_signal_media_through_adapter(self, tmp_path, monkeypatch):
+        img_path = tmp_path / "test.png"
+        img_path.write_bytes(b"\x89PNG")
+        pdf_path = tmp_path / "test.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4")
+        voice_path = tmp_path / "voice.ogg"
+        voice_path.write_bytes(b"OggS")
+
+        calls = []
+
+        class FakeSignalAdapter:
+            def __init__(self, _config):
+                pass
+
+            async def send(self, chat_id, content, metadata=None):
+                calls.append(("send", chat_id, content, metadata))
+                return MagicMock(success=True, message_id="msg-1")
+
+            async def send_multiple_images(self, chat_id, images, metadata=None, human_delay=0.0):
+                calls.append(("send_multiple_images", chat_id, images, metadata, human_delay))
+
+            async def send_document(self, chat_id, file_path, metadata=None):
+                calls.append(("send_document", chat_id, file_path, metadata))
+                return MagicMock(success=True, message_id="doc-1")
+
+            async def send_voice(self, chat_id, audio_path, metadata=None):
+                calls.append(("send_voice", chat_id, audio_path, metadata))
+                return MagicMock(success=True, message_id="voice-1")
+
+        monkeypatch.setattr("gateway.platforms.signal.SignalAdapter", FakeSignalAdapter)
+
+        result = asyncio.run(
+            _send_to_platform(
+                Platform.SIGNAL,
+                MagicMock(enabled=True, extra={}),
+                "+155****9999",
+                "Hello world",
+                media_files=[
+                    (str(img_path), False),
+                    (str(pdf_path), False),
+                    (str(voice_path), True),
+                ],
+            )
+        )
+
+        assert result == {
+            "success": True,
+            "platform": "signal",
+            "chat_id": "+155****9999",
+            "message_id": "voice-1",
+        }
+        assert calls[0] == ("send", "+155****9999", "Hello world", None)
+        assert calls[1][0] == "send_multiple_images"
+        assert calls[1][1] == "+155****9999"
+        assert calls[1][2] == [(img_path.as_uri(), "")]
+        assert calls[2] == ("send_document", "+155****9999", str(pdf_path), None)
+        assert calls[3] == ("send_voice", "+155****9999", str(voice_path), None)
+
+    def test_send_to_platform_skips_missing_signal_media_with_warning(self, tmp_path, monkeypatch):
+        img_path = tmp_path / "test.png"
+        img_path.write_bytes(b"\x89PNG")
+        missing_path = tmp_path / "missing.png"
+
+        calls = []
+
+        class FakeSignalAdapter:
+            def __init__(self, _config):
+                pass
+
+            async def send_multiple_images(self, chat_id, images, metadata=None, human_delay=0.0):
+                calls.append(("send_multiple_images", chat_id, images, metadata, human_delay))
+
+        monkeypatch.setattr("gateway.platforms.signal.SignalAdapter", FakeSignalAdapter)
+
+        result = asyncio.run(
+            _send_to_platform(
+                Platform.SIGNAL,
+                MagicMock(enabled=True, extra={}),
+                "+155****9999",
+                "",
+                media_files=[(str(missing_path), False), (str(img_path), False)],
+            )
+        )
+
+        assert result["success"] is True
+        assert result["chat_id"] == "+155****9999"
+        assert result["warnings"] == [f"Media file not found, skipping: {missing_path}"]
+        assert calls[0][0] == "send_multiple_images"
+        assert calls[0][2] == [(img_path.as_uri(), "")]
+
+    def test_send_to_platform_resolves_relative_signal_image_path(self, tmp_path, monkeypatch):
+        img_path = tmp_path / "test.png"
+        img_path.write_bytes(b"\x89PNG")
+
+        calls = []
+
+        class FakeSignalAdapter:
+            def __init__(self, _config):
+                pass
+
+            async def send_multiple_images(self, chat_id, images, metadata=None, human_delay=0.0):
+                calls.append(("send_multiple_images", chat_id, images, metadata, human_delay))
+
+        monkeypatch.setattr("gateway.platforms.signal.SignalAdapter", FakeSignalAdapter)
+        monkeypatch.chdir(tmp_path)
+
+        result = asyncio.run(
+            _send_to_platform(
+                Platform.SIGNAL,
+                MagicMock(enabled=True, extra={}),
+                "+155****9999",
+                "",
+                media_files=[("test.png", False)],
+            )
+        )
+
+        assert result["success"] is True
+        assert calls[0][2] == [(img_path.resolve().as_uri(), "")]
+
+    def test_send_to_platform_propagates_signal_image_batch_failure(self, tmp_path, monkeypatch):
+        img_path = tmp_path / "test.png"
+        img_path.write_bytes(b"\x89PNG")
+
+        class FakeSignalAdapter:
+            def __init__(self, _config):
+                pass
+
+            async def send_multiple_images(self, chat_id, images, metadata=None, human_delay=0.0):
+                return MagicMock(success=False, error="Signal image batches were not delivered")
+
+        monkeypatch.setattr("gateway.platforms.signal.SignalAdapter", FakeSignalAdapter)
+
+        result = asyncio.run(
+            _send_to_platform(
+                Platform.SIGNAL,
+                MagicMock(enabled=True, extra={}),
+                "+155****9999",
+                "",
+                media_files=[(str(img_path), False)],
+            )
+        )
+
+        assert result == {"error": "Signal image batches were not delivered"}

@@ -18,6 +18,26 @@ from typing import Dict, List, Optional, Any
 
 logger = logging.getLogger(__name__)
 
+
+def _escape_chunk_indicators_for_markdown_v2(chunks: List[str], max_length: int) -> List[str]:
+    if len(chunks) <= 1:
+        return chunks
+
+    escaped_chunks: List[str] = []
+    for chunk in chunks:
+        match = re.search(r" \((\d+)/(\d+)\)$", chunk)
+        if not match:
+            escaped_chunks.append(chunk)
+            continue
+
+        escaped_suffix = f" \\({match.group(1)}/{match.group(2)}\\)"
+        body = chunk[:match.start()]
+        body_budget = max_length - utf16_len(escaped_suffix)
+        safe_body = body if utf16_len(body) <= body_budget else _prefix_within_utf16_limit(body, body_budget)
+        escaped_chunks.append(safe_body + escaped_suffix)
+
+    return escaped_chunks
+
 try:
     from telegram import Update, Bot, Message, InlineKeyboardButton, InlineKeyboardMarkup
     try:
@@ -1126,13 +1146,10 @@ class TelegramAdapter(BasePlatformAdapter):
                 formatted, self.MAX_MESSAGE_LENGTH, len_fn=utf16_len,
             )
             if len(chunks) > 1:
-                # truncate_message appends a raw " (1/2)" suffix. Escape the
-                # MarkdownV2-special parentheses so Telegram doesn't reject the
-                # chunk and fall back to plain text.
-                chunks = [
-                    re.sub(r" \((\d+)/(\d+)\)$", r" \\(\1/\2\\)", chunk)
-                    for chunk in chunks
-                ]
+                chunks = _escape_chunk_indicators_for_markdown_v2(
+                    chunks,
+                    self.MAX_MESSAGE_LENGTH,
+                )
             
             message_ids = []
             thread_id = self._metadata_thread_id(metadata)
@@ -2079,7 +2096,7 @@ class TelegramAdapter(BasePlatformAdapter):
         images: List[tuple],
         metadata: Optional[Dict[str, Any]] = None,
         human_delay: float = 0.0,
-    ) -> None:
+    ) -> Optional[SendResult]:
         """Send a batch of images natively via Telegram's media group API.
 
         Telegram's ``send_media_group`` bundles up to 10 photos/videos into
@@ -2092,9 +2109,12 @@ class TelegramAdapter(BasePlatformAdapter):
         the base adapter's per-image loop.
         """
         if not self._bot:
-            return
+            return SendResult(success=False, error="Not connected")
         if not images:
-            return
+            return SendResult(success=True)
+
+        had_failure = False
+        last_error: Optional[str] = None
 
         try:
             from telegram import InputMediaPhoto
@@ -2103,8 +2123,7 @@ class TelegramAdapter(BasePlatformAdapter):
                 "[%s] InputMediaPhoto unavailable, falling back to per-image send: %s",
                 self.name, exc,
             )
-            await super().send_multiple_images(chat_id, images, metadata, human_delay)
-            return
+            return await super().send_multiple_images(chat_id, images, metadata, human_delay)
 
         # Peel off animations — they need send_animation, not send_media_group
         animations: List[tuple] = []
@@ -2117,12 +2136,17 @@ class TelegramAdapter(BasePlatformAdapter):
 
         # Animations: route through the base default (per-image send_animation)
         if animations:
-            await super().send_multiple_images(
+            animation_result = await super().send_multiple_images(
                 chat_id, animations, metadata, human_delay=human_delay,
             )
+            if animation_result is not None and not animation_result.success:
+                had_failure = True
+                last_error = animation_result.error or "Telegram animation delivery failed"
 
         if not photos:
-            return
+            if had_failure:
+                return SendResult(success=False, error=last_error or "Telegram image delivery failed")
+            return SendResult(success=True)
 
         from urllib.parse import unquote as _unquote
         _thread = self._metadata_thread_id(metadata)
@@ -2174,15 +2198,21 @@ class TelegramAdapter(BasePlatformAdapter):
                     exc_info=True,
                 )
                 # Fallback: send each photo in this chunk individually
-                await super().send_multiple_images(
+                fallback_result = await super().send_multiple_images(
                     chat_id, chunk, metadata, human_delay=human_delay,
                 )
+                if fallback_result is not None and not fallback_result.success:
+                    had_failure = True
+                    last_error = fallback_result.error or str(e)
             finally:
                 for fh in opened_files:
                     try:
                         fh.close()
                     except Exception:
                         pass
+        if had_failure:
+            return SendResult(success=False, error=last_error or "Telegram image delivery failed")
+        return SendResult(success=True)
 
     async def send_image_file(
         self,

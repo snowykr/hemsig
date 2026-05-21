@@ -19,7 +19,7 @@ What makes Hermes different:
 
 - **Self-improving through skills** — Hermes learns from experience by saving reusable procedures as skills. When it solves a complex problem, discovers a workflow, or gets corrected, it can persist that knowledge as a skill document that loads into future sessions. Skills accumulate over time, making the agent better at your specific tasks and environment.
 - **Persistent memory across sessions** — remembers who you are, your preferences, environment details, and lessons learned. Pluggable memory backends (built-in, Honcho, Mem0, and more) let you choose how memory works.
-- **Multi-platform gateway** — the same agent runs on Telegram, Discord, Slack, WhatsApp, Signal, Matrix, Email, and 10+ other platforms with full tool access, not just chat.
+- **Multi-platform gateway** — the same agent runs on Telegram, Discord, Slack, Signal, Email, Home Assistant, Webhooks, and the API server with full tool access, not just chat.
 - **Provider-agnostic** — swap models and providers mid-workflow without changing anything else. Credential pools rotate across multiple API keys automatically.
 - **Profiles** — run multiple independent Hermes instances with isolated configs, sessions, skills, and memory.
 - **Extensible** — plugins, MCP servers, custom tools, webhook triggers, cron scheduling, and the full Python ecosystem.
@@ -27,8 +27,6 @@ What makes Hermes different:
 People use Hermes for software development, research, system administration, data analysis, content creation, home automation, and anything else that benefits from an AI agent with persistent context and full system access.
 
 **This skill helps you work with Hermes Agent effectively** — setting it up, configuring features, spawning additional agent instances, troubleshooting issues, finding the right commands and settings, and understanding how the system works when you need to extend or contribute to it.
-
-**Docs:** https://hermes-agent.nousresearch.com/docs/
 
 ## Quick Start
 
@@ -148,9 +146,7 @@ hermes gateway status       Check status
 hermes gateway setup        Configure platforms
 ```
 
-Supported platforms: Telegram, Discord, Slack, WhatsApp, Signal, Email, SMS, Matrix, Mattermost, Home Assistant, DingTalk, Feishu, WeCom, BlueBubbles (iMessage), Weixin (WeChat), API Server, Webhooks. Open WebUI connects via the API Server adapter.
-
-Platform docs: https://hermes-agent.nousresearch.com/docs/user-guide/messaging/
+Supported platforms: Telegram, Discord, Slack, Signal, Email, Home Assistant, API Server, and Webhooks. Open WebUI connects via the API Server adapter.
 
 ### Sessions
 
@@ -338,7 +334,7 @@ Edit with `hermes config edit` or `hermes config set section.key value`.
 | `delegation` | `model`, `provider`, `base_url`, `api_key`, `max_iterations` (50), `reasoning_effort` |
 | `checkpoints` | `enabled`, `max_snapshots` (50) |
 
-Full config reference: https://hermes-agent.nousresearch.com/docs/user-guide/configuration
+Use `hermes config edit` and `hermes config show` for the local config reference.
 
 ### Providers
 
@@ -369,7 +365,7 @@ Full config reference: https://hermes-agent.nousresearch.com/docs/user-guide/con
 | Custom endpoint | Config | `model.base_url` + `model.api_key` in config.yaml |
 | GitHub Copilot ACP | External | `COPILOT_CLI_PATH` or Copilot CLI |
 
-Full provider docs: https://hermes-agent.nousresearch.com/docs/integrations/providers
+Full provider docs: integrations/providers
 
 ### Toolsets
 
@@ -633,18 +629,18 @@ hermes config set auxiliary.vision.model <model_name>
 
 | Looking for... | Location |
 |----------------|----------|
-| Config options | `hermes config edit` or [Configuration docs](https://hermes-agent.nousresearch.com/docs/user-guide/configuration) |
-| Available tools | `hermes tools list` or [Tools reference](https://hermes-agent.nousresearch.com/docs/reference/tools-reference) |
-| Slash commands | `/help` in session or [Slash commands reference](https://hermes-agent.nousresearch.com/docs/reference/slash-commands) |
-| Skills catalog | `hermes skills browse` or [Skills catalog](https://hermes-agent.nousresearch.com/docs/reference/skills-catalog) |
-| Provider setup | `hermes model` or [Providers guide](https://hermes-agent.nousresearch.com/docs/integrations/providers) |
-| Platform setup | `hermes gateway setup` or [Messaging docs](https://hermes-agent.nousresearch.com/docs/user-guide/messaging/) |
-| MCP servers | `hermes mcp list` or [MCP guide](https://hermes-agent.nousresearch.com/docs/user-guide/features/mcp) |
-| Profiles | `hermes profile list` or [Profiles docs](https://hermes-agent.nousresearch.com/docs/user-guide/profiles) |
-| Cron jobs | `hermes cron list` or [Cron docs](https://hermes-agent.nousresearch.com/docs/user-guide/features/cron) |
-| Memory | `hermes memory status` or [Memory docs](https://hermes-agent.nousresearch.com/docs/user-guide/features/memory) |
-| Env variables | `hermes config env-path` or [Env vars reference](https://hermes-agent.nousresearch.com/docs/reference/environment-variables) |
-| CLI commands | `hermes --help` or [CLI reference](https://hermes-agent.nousresearch.com/docs/reference/cli-commands) |
+| Config options | `hermes config edit` or `hermes config show` |
+| Available tools | `hermes tools list` |
+| Slash commands | `/help` in session |
+| Skills catalog | `hermes skills browse` |
+| Provider setup | `hermes model` |
+| Platform setup | `hermes gateway setup` |
+| MCP servers | `hermes mcp list` |
+| Profiles | `hermes profile list` |
+| Cron jobs | `hermes cron list` |
+| Memory | `hermes memory status` |
+| Env variables | `hermes config env-path` |
+| CLI commands | `hermes --help` |
 | Gateway logs | `~/.hermes/logs/gateway.log` |
 | Session files | `~/.hermes/sessions/` or `hermes sessions browse` |
 | Source code | `~/.hermes/hermes-agent/` |
@@ -653,7 +649,7 @@ hermes config set auxiliary.vision.model <model_name>
 
 ## Contributor Quick Reference
 
-For occasional contributors and PR authors. Full developer docs: https://hermes-agent.nousresearch.com/docs/developer-guide/
+For occasional contributors and PR authors. See `AGENTS.md` and `CONTRIBUTING.md` in the source tree.
 
 ### Project Layout
 
@@ -674,8 +670,7 @@ hermes-agent/
 ├── gateway/              # Messaging gateway
 │   └── platforms/        # Platform adapters (telegram, discord, etc.)
 ├── cron/                 # Job scheduler
-├── tests/                # ~3000 pytest tests
-└── website/              # Docusaurus docs site
+└── tests/                # ~3000 pytest tests
 ```
 
 Config: `~/.hermes/config.yaml` (settings), `~/.hermes/.env` (API keys).

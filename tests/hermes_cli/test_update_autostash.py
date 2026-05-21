@@ -311,7 +311,7 @@ def test_cmd_update_retries_optional_extras_individually_when_all_fails(monkeypa
     """When .[all] fails, update should keep base deps and retry extras individually."""
     _setup_update_mocks(monkeypatch, tmp_path)
     monkeypatch.setattr("shutil.which", lambda name: "/usr/bin/uv" if name == "uv" else None)
-    monkeypatch.setattr(hermes_main, "_load_installable_optional_extras", lambda: ["matrix", "mcp"])
+    monkeypatch.setattr(hermes_main, "_load_installable_optional_extras", lambda: ["google", "mcp"])
 
     recorded = []
 
@@ -329,7 +329,7 @@ def test_cmd_update_retries_optional_extras_individually_when_all_fails(monkeypa
             raise CalledProcessError(returncode=1, cmd=cmd)
         if cmd == ["/usr/bin/uv", "pip", "install", "-e", ".", "--quiet"]:
             return SimpleNamespace(returncode=0)
-        if cmd == ["/usr/bin/uv", "pip", "install", "-e", ".[matrix]", "--quiet"]:
+        if cmd == ["/usr/bin/uv", "pip", "install", "-e", ".[google]", "--quiet"]:
             raise CalledProcessError(returncode=1, cmd=cmd)
         if cmd == ["/usr/bin/uv", "pip", "install", "-e", ".[mcp]", "--quiet"]:
             return SimpleNamespace(returncode=0)
@@ -346,14 +346,14 @@ def test_cmd_update_retries_optional_extras_individually_when_all_fails(monkeypa
     assert install_cmds == [
         ["/usr/bin/uv", "pip", "install", "-e", ".[all]", "--quiet"],
         ["/usr/bin/uv", "pip", "install", "-e", ".", "--quiet"],
-        ["/usr/bin/uv", "pip", "install", "-e", ".[matrix]", "--quiet"],
+        ["/usr/bin/uv", "pip", "install", "-e", ".[google]", "--quiet"],
         ["/usr/bin/uv", "pip", "install", "-e", ".[mcp]", "--quiet"],
     ]
 
     out = capsys.readouterr().out
     assert "retrying extras individually" in out
     assert "Reinstalled optional extras individually: mcp" in out
-    assert "Skipped optional extras that still failed: matrix" in out
+    assert "Skipped optional extras that still failed: google" in out
 
 
 def test_cmd_update_succeeds_with_extras(monkeypatch, tmp_path):

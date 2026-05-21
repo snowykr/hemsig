@@ -116,7 +116,8 @@ class TestCmdUpdateBranchFallback:
             branch="main", verify_ok=True, commit_count="1"
         )
 
-        cmd_update(mock_args)
+        with patch("hermes_cli.main._web_ui_build_needed", return_value=True):
+            cmd_update(mock_args)
 
         npm_calls = [
             (call.args[0], call.kwargs.get("cwd"))

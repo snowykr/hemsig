@@ -95,7 +95,7 @@ _PREFIX_PATTERNS = [
     r"tvly-[A-Za-z0-9]{10,}",           # Tavily search API key
     r"exa_[A-Za-z0-9]{10,}",            # Exa search API key
     r"gsk_[A-Za-z0-9]{10,}",            # Groq Cloud API key
-    r"syt_[A-Za-z0-9]{10,}",            # Matrix access token
+    r"syt_[A-Za-z0-9]{10,}",            # Opaque service access token
     r"retaindb_[A-Za-z0-9]{10,}",       # RetainDB API key
     r"hsk-[A-Za-z0-9]{10,}",            # Hindsight API key
     r"mem0_[A-Za-z0-9]{10,}",           # Mem0 Platform API key
@@ -372,7 +372,7 @@ def redact_sensitive_text(text: str, *, force: bool = False) -> str:
     # Discord user/role mentions (<@snowflake_id>)
     text = _DISCORD_MENTION_RE.sub(lambda m: f"<@{'!' if '!' in m.group(0) else ''}***>", text)
 
-    # E.164 phone numbers (Signal, WhatsApp)
+    # E.164 phone numbers (for supported phone-based integrations)
     def _redact_phone(m):
         phone = m.group(1)
         if len(phone) <= 8:

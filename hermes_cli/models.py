@@ -952,16 +952,9 @@ def fetch_openrouter_models(
     if _openrouter_catalog_cache is not None and not force_refresh:
         return list(_openrouter_catalog_cache)
 
-    # Prefer the remotely-hosted catalog manifest; fall back to the in-repo
-    # snapshot when the manifest is unreachable. Both are curated lists that
-    # drive the picker; the OpenRouter live /v1/models filter (tool support,
-    # free pricing) is applied on top either way.
-    try:
-        from hermes_cli.model_catalog import get_curated_openrouter_models
-        remote = get_curated_openrouter_models()
-    except Exception:
-        remote = None
-    fallback = list(remote) if remote else list(OPENROUTER_MODELS)
+    # Use the in-repo curated snapshot as the picker seed. The OpenRouter live
+    # /v1/models filter (tool support, free pricing) is applied on top.
+    fallback = list(OPENROUTER_MODELS)
     preferred_ids = [mid for mid, _ in fallback]
 
     try:
@@ -1015,20 +1008,7 @@ def model_ids(*, force_refresh: bool = False) -> list[str]:
 
 
 def get_curated_nous_model_ids() -> list[str]:
-    """Return the curated Nous Portal model-id list.
-
-    Prefers the remotely-hosted catalog manifest (published under
-    ``website/static/api/model-catalog.json``); falls back to the in-repo
-    snapshot in ``_PROVIDER_MODELS["nous"]`` when the manifest is
-    unreachable. Always returns a list (never None).
-    """
-    try:
-        from hermes_cli.model_catalog import get_curated_nous_models
-        remote = get_curated_nous_models()
-    except Exception:
-        remote = None
-    if remote:
-        return list(remote)
+    """Return the in-repo curated Nous Portal model-id list."""
     return list(_PROVIDER_MODELS.get("nous", []))
 
 

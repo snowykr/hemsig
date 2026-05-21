@@ -71,27 +71,19 @@ class DeliveryTarget:
         if target_lower == "local":
             return cls(platform=Platform.LOCAL)
         
-        # Check for platform:chat_id or platform:chat_id:thread_id format
-        # Use the original case for chat_id/thread_id to preserve case-sensitive IDs
+        # Check for platform:chat_id or platform:chat_id:thread_id format.
+        # Use the original case for chat_id/thread_id to preserve case-sensitive IDs.
         if ":" in target_stripped:
             parts = target_stripped.split(":", 2)
             platform_str = parts[0].lower()  # Platform names are case-insensitive
             chat_id = parts[1] if len(parts) > 1 else None
             thread_id = parts[2] if len(parts) > 2 else None
-            try:
-                platform = Platform(platform_str)
-                return cls(platform=platform, chat_id=chat_id, thread_id=thread_id, is_explicit=True)
-            except ValueError:
-                # Unknown platform, treat as local
-                return cls(platform=Platform.LOCAL)
+            platform = Platform(platform_str)
+            return cls(platform=platform, chat_id=chat_id, thread_id=thread_id, is_explicit=True)
         
         # Just a platform name (use home channel)
-        try:
-            platform = Platform(target_lower)
-            return cls(platform=platform)
-        except ValueError:
-            # Unknown platform, treat as local
-            return cls(platform=Platform.LOCAL)
+        platform = Platform(target_lower)
+        return cls(platform=platform)
     
     def to_string(self) -> str:
         """Convert back to string format."""
@@ -252,7 +244,6 @@ class DeliveryRouter:
         if target.thread_id and "thread_id" not in send_metadata:
             send_metadata["thread_id"] = target.thread_id
         return await adapter.send(target.chat_id, content, metadata=send_metadata or None)
-
 
 
 

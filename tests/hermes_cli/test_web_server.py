@@ -146,8 +146,8 @@ class TestWebServerEndpoints:
                 "updated_at": "2026-04-12T00:00:00+00:00",
                 "platforms": {
                     "telegram": {"state": "connected", "updated_at": "2026-04-12T00:00:00+00:00"},
-                    "whatsapp": {"state": "retrying", "updated_at": "2026-04-12T00:00:00+00:00"},
-                    "feishu": {"state": "connected", "updated_at": "2026-04-12T00:00:00+00:00"},
+                    "signal": {"state": "retrying", "updated_at": "2026-04-12T00:00:00+00:00"},
+                    "email": {"state": "connected", "updated_at": "2026-04-12T00:00:00+00:00"},
                 },
             },
         )
@@ -159,6 +159,43 @@ class TestWebServerEndpoints:
         assert resp.status_code == 200
         assert resp.json()["gateway_platforms"] == {
             "telegram": {"state": "connected", "updated_at": "2026-04-12T00:00:00+00:00"},
+        }
+
+    def test_get_status_preserves_plugin_runtime_platforms(self, monkeypatch):
+        import gateway.config as gateway_config
+        import hermes_cli.web_server as web_server
+
+        class _Platform:
+            def __init__(self, value):
+                self.value = value
+
+        class _GatewayConfig:
+            def get_connected_platforms(self):
+                return [_Platform("telegram")]
+
+        monkeypatch.setattr(web_server, "get_running_pid", lambda: 1234)
+        monkeypatch.setattr(
+            web_server,
+            "read_runtime_status",
+            lambda: {
+                "gateway_state": "running",
+                "updated_at": "2026-04-12T00:00:00+00:00",
+                "platforms": {
+                    "telegram": {"state": "connected", "updated_at": "2026-04-12T00:00:00+00:00"},
+                    "customchat": {"state": "connected", "updated_at": "2026-04-12T00:00:00+00:00"},
+                    "signal": {"state": "retrying", "updated_at": "2026-04-12T00:00:00+00:00"},
+                },
+            },
+        )
+        monkeypatch.setattr(web_server, "check_config_version", lambda: (1, 1))
+        monkeypatch.setattr(gateway_config, "load_gateway_config", lambda: _GatewayConfig())
+
+        resp = self.client.get("/api/status")
+
+        assert resp.status_code == 200
+        assert resp.json()["gateway_platforms"] == {
+            "telegram": {"state": "connected", "updated_at": "2026-04-12T00:00:00+00:00"},
+            "customchat": {"state": "connected", "updated_at": "2026-04-12T00:00:00+00:00"},
         }
 
     def test_get_status_hides_stale_platforms_when_gateway_not_running(self, monkeypatch):
@@ -177,8 +214,8 @@ class TestWebServerEndpoints:
                 "gateway_state": "startup_failed",
                 "updated_at": "2026-04-12T00:00:00+00:00",
                 "platforms": {
-                    "whatsapp": {"state": "retrying", "updated_at": "2026-04-12T00:00:00+00:00"},
-                    "feishu": {"state": "connected", "updated_at": "2026-04-12T00:00:00+00:00"},
+                    "signal": {"state": "retrying", "updated_at": "2026-04-12T00:00:00+00:00"},
+                    "email": {"state": "connected", "updated_at": "2026-04-12T00:00:00+00:00"},
                 },
             },
         )
@@ -1917,7 +1954,7 @@ class TestDashboardPluginManifestExtensions:
                 "skills:bottom",
                 "config:top",
                 "env:bottom",
-                "docs:top",
+                "plugins:top",
                 "cron:bottom",
                 "chat:top",
             ],
@@ -1934,7 +1971,7 @@ class TestDashboardPluginManifestExtensions:
             "skills:bottom",
             "config:top",
             "env:bottom",
-            "docs:top",
+            "plugins:top",
             "cron:bottom",
             "chat:top",
         ]

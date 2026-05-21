@@ -330,8 +330,9 @@ Configuration:
     Set environment variables in .env file or system environment:
     - TELEGRAM_BOT_TOKEN
     - DISCORD_BOT_TOKEN
-    - WHATSAPP_ENABLED
-    
+    - SLACK_BOT_TOKEN
+    - SIGNAL_HTTP_URL
+     
     Or create ~/.hermes/gateway.json for advanced configuration.
 """
     )

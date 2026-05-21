@@ -12,6 +12,7 @@ import type {
 } from '../gatewayTypes.js'
 import { isAction, isCopyShortcut, isMac, isVoiceToggleKey } from '../lib/platform.js'
 import { computeWheelStep, initWheelAccelForHost } from '../lib/wheelAccel.js'
+import { takeDrainableQueuedSubmission } from '../hooks/useQueue.js'
 
 import { getInputSelection } from './inputSelectionStore.js'
 import type { InputHandlerContext, InputHandlerResult } from './interfaces.js'
@@ -118,7 +119,7 @@ export function useInputHandlers(ctx: InputHandlerContext): InputHandlerResult {
 
     cActions.setQueueEdit(index)
     cActions.setHistoryIdx(null)
-    cActions.setInput(cRefs.queueRef.current[index] ?? '')
+    cActions.setInput(cRefs.queueRef.current[index]?.text ?? '')
 
     return true
   }
@@ -491,9 +492,10 @@ export function useInputHandlers(ctx: InputHandlerContext): InputHandlerResult {
     }
 
     if (isAction(key, ch, 'k') && cRefs.queueRef.current.length && live.sid) {
-      const next = cActions.dequeue()
+      const next = takeDrainableQueuedSubmission(cRefs.queueRef.current, live.sid)
 
       if (next) {
+        cActions.syncQueue()
         cActions.setQueueEdit(null)
         actions.dispatchSubmission(next)
       }

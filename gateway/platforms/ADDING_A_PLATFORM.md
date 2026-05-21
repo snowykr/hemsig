@@ -13,9 +13,8 @@ The plugin system automatically handles: adapter creation, config parsing,
 user authorization, cron delivery, send_message routing, system prompt hints,
 status display, gateway setup, and more.
 
-See `plugins/platforms/irc/` for a complete reference implementation, and
-`website/docs/developer-guide/adding-platform-adapters.md` for the full
-plugin guide with code examples.
+Use this file and the current adapters under `gateway/platforms/` as working
+references for plugin and built-in platform integrations.
 
 ---
 
@@ -98,7 +97,7 @@ if your_token:
 ```
 
 Update `get_connected_platforms()` if your platform doesn't use token/api_key
-(e.g., WhatsApp uses `enabled` flag, Signal uses `extra` dict).
+(e.g., Signal uses `extra` dict).
 
 ---
 
@@ -200,14 +199,7 @@ Without this, `cronjob(action="create", deliver="your_platform", ...)` silently 
 
 ## 9. Send Message Tool (`tools/send_message_tool.py`)
 
-Add to `platform_map` in `send_message_tool()`:
-
-```python
-platform_map = {
-    ...
-    "your_platform": Platform.YOUR_PLATFORM,
-}
-```
+No platform-name map is required here anymore — `send_message_tool()` resolves built-in names through `Platform(platform_name)`. If your platform needs a custom explicit target format, add parsing in `_parse_target_ref()`.
 
 Add routing in `_send_to_platform()`:
 
@@ -237,7 +229,7 @@ If your platform can't enumerate chats (most can't), add it to the
 session-based discovery list:
 
 ```python
-for plat_name in ("telegram", "whatsapp", "signal", "your_platform"):
+for plat_name in ("telegram", "slack", "signal", "your_platform"):
 ```
 
 ---
@@ -291,11 +283,10 @@ identifiers are masked in ALL log output, not just your adapter's logs.
 
 | File | What to update |
 |------|---------------|
-| `README.md` | Platform list in feature table + documentation table |
+| `README.md` | Platform list in feature table |
 | `AGENTS.md` | Gateway description + env var config section |
-| `website/docs/user-guide/messaging/<platform>.md` | **NEW** — Full setup guide (see existing platform docs for template) |
-| `website/docs/user-guide/messaging/index.md` | Architecture diagram, toolset table, security examples, Next Steps links |
-| `website/docs/reference/environment-variables.md` | All env vars for the platform |
+| `gateway/platforms/ADDING_A_PLATFORM.md` | Integration checklist updates if the platform changes shared requirements |
+| `cli-config.yaml.example` / `.env.example` | Config or env examples for the platform |
 
 ---
 
@@ -309,7 +300,7 @@ Recommended test coverage:
 - Helper functions (redaction, parsing, file type detection)
 - Session source round-trip (to_dict → from_dict)
 - Authorization integration (platform in allowlist maps)
-- Send message tool routing (platform in platform_map)
+- Send message tool routing (`Platform(platform_name)` resolution, any `_parse_target_ref()` custom parsing, and `_send_to_platform()` dispatch)
 
 Optional but valuable:
 - Async tests for message handling flow (mock the platform API)
@@ -328,7 +319,7 @@ After implementing everything, verify with:
 python -m pytest tests/ -q
 
 # Grep for your platform name to find any missed integration points
-grep -r "telegram\|discord\|whatsapp\|slack" gateway/ tools/ agent/ cron/ hermes_cli/ toolsets.py \
+grep -r "telegram\|discord\|signal\|slack" gateway/ tools/ agent/ cron/ hermes_cli/ toolsets.py \
   --include="*.py" -l | sort -u
 # Check each file in the output — if it mentions other platforms but not yours, you missed it
 ```

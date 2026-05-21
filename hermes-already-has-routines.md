@@ -58,7 +58,7 @@ Every use case in their blog post — backlog triage, docs drift, deploy verific
 | **Skill chaining** | ❌ | ✅ Load multiple skills per automation |
 | **Daily limit** | 5-25 runs/day | **Unlimited** |
 | **Model choice** | Claude only | **Any model** — Claude, GPT, Gemini, DeepSeek, Qwen, local |
-| **Delivery targets** | GitHub comments | Telegram, Discord, Slack, SMS, email, GitHub comments, webhooks, local files |
+| **Delivery targets** | GitHub comments | Telegram, Discord, Slack, Signal, email, GitHub comments, webhooks, local files |
 | **Infrastructure** | Anthropic's servers | **Your infrastructure** — VPS, home server, laptop |
 | **Data residency** | Anthropic's cloud | **Your machines** |
 | **Cost** | Pro/Max/Team/Enterprise subscription | Your API key, your rates |
@@ -101,7 +101,7 @@ One automation, any destination:
 --deliver telegram                      # Telegram home channel
 --deliver discord                       # Discord home channel  
 --deliver slack                         # Slack channel
---deliver sms:+15551234567              # Text message
+--deliver signal:+15551234567           # Signal message
 --deliver telegram:-1001234567890:42    # Specific Telegram forum topic
 --deliver local                         # Save to file, no notification
 ```
@@ -148,10 +148,6 @@ hermes webhook subscribe pr-review \
   --skills "github-code-review" \
   --deliver github_comment
 ```
-
-Full automation templates gallery: [hermes-agent.nousresearch.com/docs/guides/automation-templates](https://hermes-agent.nousresearch.com/docs/guides/automation-templates)
-
-Documentation: [hermes-agent.nousresearch.com](https://hermes-agent.nousresearch.com)
 
 GitHub: [github.com/NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent)
 

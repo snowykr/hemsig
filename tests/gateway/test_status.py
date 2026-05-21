@@ -306,6 +306,116 @@ class TestGatewayRuntimeStatus:
         assert payload["platforms"]["telegram"]["error_code"] == "telegram_polling_conflict"
         assert payload["platforms"]["telegram"]["error_message"] == "another poller is active"
 
+    def test_read_runtime_status_prunes_removed_platform_entries(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+
+        state_path = tmp_path / "gateway_state.json"
+        state_path.write_text(json.dumps({
+            "pid": os.getpid(),
+            "kind": "hermes-gateway",
+            "platforms": {
+                "discord": {"state": "connected"},
+                "legacychat": {"state": "connected"},
+            },
+            "updated_at": "2026-05-07T23:03:31.362552+00:00",
+        }))
+
+        payload = status.read_runtime_status()
+
+        assert payload is not None
+        assert "discord" in payload["platforms"]
+        assert "legacychat" not in payload["platforms"]
+
+    def test_write_runtime_status_prunes_removed_entries_but_keeps_registered_plugins(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+
+        from gateway.platform_registry import PlatformEntry, platform_registry
+
+        state_path = tmp_path / "gateway_state.json"
+        state_path.write_text(json.dumps({
+            "pid": 99999,
+            "kind": "hermes-gateway",
+            "platforms": {
+                "discord": {"state": "connected"},
+                "cronchat": {"state": "connected"},
+                "legacychat": {"state": "connected"},
+            },
+            "updated_at": "2026-05-07T23:03:31.362552+00:00",
+        }))
+
+        entry = PlatformEntry(
+            name="cronchat",
+            label="Cron Chat",
+            adapter_factory=lambda cfg: None,
+            check_fn=lambda: True,
+            source="plugin",
+        )
+        platform_registry.register(entry)
+        try:
+            status.write_runtime_status(gateway_state="running")
+            payload = status.read_runtime_status()
+        finally:
+            platform_registry.unregister("cronchat")
+
+        assert payload is not None
+        assert "discord" in payload["platforms"]
+        assert "cronchat" in payload["platforms"]
+        assert "legacychat" not in payload["platforms"]
+
+    def test_read_runtime_status_prunes_previously_cached_removed_plugin_entries(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+
+        from gateway.config import Platform
+        from gateway.platform_registry import PlatformEntry, platform_registry
+
+        entry = PlatformEntry(
+            name="cachechat",
+            label="Cache Chat",
+            adapter_factory=lambda cfg: None,
+            check_fn=lambda: True,
+            source="plugin",
+        )
+        platform_registry.register(entry)
+        try:
+            Platform("cachechat")
+        finally:
+            platform_registry.unregister("cachechat")
+
+        state_path = tmp_path / "gateway_state.json"
+        state_path.write_text(json.dumps({
+            "pid": os.getpid(),
+            "kind": "hermes-gateway",
+            "platforms": {
+                "cachechat": {"state": "connected"},
+            },
+            "updated_at": "2026-05-07T23:03:31.362552+00:00",
+        }))
+
+        payload = status.read_runtime_status()
+
+        assert payload is not None
+        assert "cachechat" not in payload["platforms"]
+
+    def test_read_runtime_status_prunes_blank_platform_entries(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+
+        state_path = tmp_path / "gateway_state.json"
+        state_path.write_text(json.dumps({
+            "pid": os.getpid(),
+            "kind": "hermes-gateway",
+            "platforms": {
+                "   ": {"state": "connected"},
+                " telegram ": {"state": "connected"},
+            },
+            "updated_at": "2026-05-07T23:03:31.362552+00:00",
+        }))
+
+        payload = status.read_runtime_status()
+
+        assert payload is not None
+        assert "   " not in payload["platforms"]
+        assert "telegram" in payload["platforms"]
+
     def test_write_runtime_status_explicit_none_clears_stale_fields(self, tmp_path, monkeypatch):
         monkeypatch.setenv("HERMES_HOME", str(tmp_path))
 

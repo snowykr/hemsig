@@ -87,10 +87,6 @@ MIGRATION_OPTION_METADATA: Dict[str, Dict[str, str]] = {
         "label": "Slack settings",
         "description": "Import Slack bot/app tokens and allowlist into Hermes .env.",
     },
-    "whatsapp-settings": {
-        "label": "WhatsApp settings",
-        "description": "Import WhatsApp allowlist into Hermes .env.",
-    },
     "signal-settings": {
         "label": "Signal settings",
         "description": "Import Signal account, HTTP URL, and allowlist into Hermes .env.",
@@ -153,7 +149,7 @@ MIGRATION_OPTION_METADATA: Dict[str, Dict[str, str]] = {
     },
     "deep-channels": {
         "label": "Deep channel configuration",
-        "description": "Import extended channel settings (Matrix, Mattermost, IRC, group configs). Archive complex settings.",
+        "description": "Import extended channel settings (group configs and unsupported legacy channels). Archive complex settings.",
     },
     "browser-config": {
         "label": "Browser configuration",
@@ -196,7 +192,6 @@ MIGRATION_PRESETS: Dict[str, set[str]] = {
         "tts-assets",
         "discord-settings",
         "slack-settings",
-        "whatsapp-settings",
         "signal-settings",
         "model-config",
         "tts-config",
@@ -916,7 +911,6 @@ class Migrator:
         self.run_if_selected("secret-settings", lambda: self.handle_secret_settings(config))
         self.run_if_selected("discord-settings", lambda: self.migrate_discord_settings(config))
         self.run_if_selected("slack-settings", lambda: self.migrate_slack_settings(config))
-        self.run_if_selected("whatsapp-settings", lambda: self.migrate_whatsapp_settings(config))
         self.run_if_selected("signal-settings", lambda: self.migrate_signal_settings(config))
         self.run_if_selected("provider-keys", lambda: self.handle_provider_keys(config))
         self.run_if_selected("model-config", lambda: self.migrate_model_config(config))
@@ -1459,21 +1453,6 @@ class Migrator:
             self.merge_env_values(additions, "slack-settings", self.source_root / "openclaw.json")
         else:
             self.record("slack-settings", self.source_root / "openclaw.json", self.target_root / ".env", "skipped", "No Slack settings found")
-
-    def migrate_whatsapp_settings(self, config: Optional[Dict[str, Any]] = None) -> None:
-        config = config or self.load_openclaw_config()
-        additions: Dict[str, str] = {}
-        whatsapp = config.get("channels", {}).get("whatsapp", {})
-        if isinstance(whatsapp, dict):
-            allow_from = self._get_channel_field(whatsapp, "allowFrom") or []
-            if isinstance(allow_from, list):
-                users = [str(u).strip() for u in allow_from if str(u).strip()]
-                if users:
-                    additions["WHATSAPP_ALLOWED_USERS"] = ",".join(users)
-        if additions:
-            self.merge_env_values(additions, "whatsapp-settings", self.source_root / "openclaw.json")
-        else:
-            self.record("whatsapp-settings", self.source_root / "openclaw.json", self.target_root / ".env", "skipped", "No WhatsApp settings found")
 
     def migrate_signal_settings(self, config: Optional[Dict[str, Any]] = None) -> None:
         config = config or self.load_openclaw_config()
@@ -2560,17 +2539,10 @@ class Migrator:
             self.record("deep-channels", None, None, "skipped", "No channel configuration found")
             return
 
-        # Extended channel token/allowlist mapping
+        # Extended channel token/allowlist mapping for supported retained channels.
         CHANNEL_ENV_MAP = {
-            "matrix": {"token": "MATRIX...OKEN", "tokenField": "accessToken", "allowFrom": "MATRIX_ALLOWED_USERS",
-                        "extras": {"homeserverUrl": "MATRIX_HOMESERVER_URL", "userId": "MATRIX_USER_ID"}},
-            "mattermost": {"token": "MATTERMOST_BOT_TOKEN", "allowFrom": "MATTERMOST_ALLOWED_USERS",
-                           "extras": {"url": "MATTERMOST_URL", "teamId": "MATTERMOST_TEAM_ID"}},
-            "irc": {"extras": {"server": "IRC_SERVER", "nick": "IRC_NICK", "channels": "IRC_CHANNELS"}},
             "googlechat": {"extras": {"serviceAccountKeyPath": "GOOGLE_CHAT_SA_KEY_PATH"}},
             "imessage": {},
-            "bluebubbles": {"extras": {"server": "BLUEBUBBLES_SERVER", "password": "BLUEBUBBLES_PASSWORD"}},
-            "msteams": {"token": "MSTEAMS_BOT_TOKEN", "allowFrom": "MSTEAMS_ALLOWED_USERS"},
             "nostr": {"extras": {"nsec": "NOSTR_NSEC", "relays": "NOSTR_RELAYS"}},
             "twitch": {"token": "TWITCH_BOT_TOKEN", "extras": {"channels": "TWITCH_CHANNELS"}},
         }
@@ -2927,20 +2899,6 @@ class Migrator:
                 "Imported skills require a new session to take effect. After migration,",
                 "restart your agent or start a new chat session, then run `/skills`",
                 "to verify they loaded correctly.",
-                "",
-            ])
-
-        # Check if WhatsApp was detected
-        has_whatsapp = any(i.kind == "whatsapp-settings" and i.status == "migrated" for i in self.items)
-        if has_whatsapp:
-            notes.extend([
-                "",
-                "## WhatsApp Requires Re-Pairing",
-                "",
-                "WhatsApp uses QR-code pairing, not token-based auth. Your allowlist",
-                "was migrated, but you must re-pair the device by running:",
-                "",
-                "    hermes whatsapp",
                 "",
             ])
 

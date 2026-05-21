@@ -60,7 +60,9 @@ def _check_ws_token(provided: Optional[str]) -> bool:
     if not provided:
         return False
     try:
-        from hermes_cli import web_server as _ws
+        import importlib
+
+        _ws = importlib.import_module("hermes_cli.web_server")
     except Exception:
         # No dashboard context (tests). Accept so the tail loop is still
         # testable; in production the dashboard module always imports

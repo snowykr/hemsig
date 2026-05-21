@@ -384,7 +384,7 @@ class TestStripThinkBlocks:
     # Some open models (notably Gemma variants via OpenRouter) emit
     # standalone tool-call XML inside assistant content instead of via the
     # structured `tool_calls` field. Left unstripped, raw XML leaks to
-    # gateway users (Discord/Telegram/Matrix) and the CLI.
+    # gateway users (Discord/Telegram/Slack) and the CLI.
 
     def test_tool_call_block_stripped(self, agent):
         text = '<tool_call>{"name": "read_file", "arguments": {"path": "/tmp/x"}}</tool_call> done'

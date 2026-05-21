@@ -44,13 +44,13 @@ You can provide a persona or let the agent generate one based on your product's 
 If no persona is provided, generate one by answering:
 
 1. **Who is the HARDEST user for this product?** (age 50+, non-technical role, decades of experience doing it "the old way")
-2. **What is their tech comfort level?** (the lower the better — WhatsApp-only, paper notebooks, wife set up their email)
+2. **What is their tech comfort level?** (the lower the better — chat-app-only, paper notebooks, wife set up their email)
 3. **What is the ONE thing they need to accomplish?** (their core job, not your feature list)
 4. **What would make them give up?** (too many clicks, jargon, slow, confusing)
 5. **How do they talk when frustrated?** (blunt, sweary, dismissive, sighing)
 
 ### Good Persona Example
-> **"Big Mick" McAllister** — 58-year-old S&C coach. Uses WhatsApp and that's it. His "spreadsheet" is a paper notebook. "If I can't figure it out in 10 seconds I'm going back to my notebook." Needs to log session results for 25 players. Hates small text, jargon, and passwords.
+> **"Big Mick" McAllister** — 58-year-old S&C coach. Uses a single chat app and that's it. His "spreadsheet" is a paper notebook. "If I can't figure it out in 10 seconds I'm going back to my notebook." Needs to log session results for 25 players. Hates small text, jargon, and passwords.
 
 ### Bad Persona Example
 > "A user who doesn't like the app" — too vague, no constraints, no voice.

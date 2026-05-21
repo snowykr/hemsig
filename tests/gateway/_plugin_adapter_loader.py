@@ -3,11 +3,11 @@
 Every platform plugin under ``plugins/platforms/<name>/`` ships its own
 ``adapter.py``. If two tests independently do::
 
-    sys.path.insert(0, "plugins/platforms/irc")
-    from adapter import IRCAdapter
+    sys.path.insert(0, "plugins/platforms/example_a")
+    from adapter import ExampleAAdapter
 
-    sys.path.insert(0, "plugins/platforms/teams")
-    from adapter import TeamsAdapter
+    sys.path.insert(0, "plugins/platforms/example_b")
+    from adapter import ExampleBAdapter
 
 …then whichever collects first in an xdist worker wins
 ``sys.modules["adapter"]``, and the other raises ``ImportError`` at

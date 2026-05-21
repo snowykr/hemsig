@@ -307,7 +307,7 @@ class TestAutoVoiceReply:
             event, response, agent_messages or []
         )
 
-    # -- Full platform x input x mode matrix --------------------------------
+    # -- Full platform x input x mode table --------------------------------
     #
     # Legend:
     #   base = base adapter auto-TTS (play_tts)

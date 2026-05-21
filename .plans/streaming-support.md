@@ -396,17 +396,15 @@ carries metadata; adding one more field is low-risk.
 | Telegram | ✅ edit_message_text | ~20 edits/min | Edit every 1.5s |
 | Discord | ✅ message.edit | 5 edits/5s per message | Edit every 1.2s |
 | Slack | ✅ chat.update | Tier 3 (~50/min) | Edit every 1.5s |
-| WhatsApp | ❌ no edit support | N/A | Skip streaming, use normal path |
 | HomeAssistant | ❌ no edit | N/A | Skip streaming |
 | API Server | ✅ SSE native | No limit | Real SSE events |
 
-WhatsApp and HomeAssistant fall back to non-streaming automatically because
-they don't support message editing.
+Platforms without message-edit support fall back to non-streaming automatically.
 
 **Tests for Phase 2:** (~100 lines)
 - Test stream_preview sends/edits correctly
 - Test skip-final-send when streaming delivered
-- Test WhatsApp/HA graceful fallback
+- Test non-editing platform graceful fallback
 - Test streaming disabled per-platform config
 - Test thread_id metadata forwarded in stream messages
 

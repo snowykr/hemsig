@@ -2,6 +2,7 @@
 
 import io
 import json
+from pathlib import Path
 import sys
 import threading
 import time
@@ -592,6 +593,160 @@ def test_command_dispatch_returns_skill_payload(server):
     assert result["type"] == "skill"
     assert result["message"] == fake_msg
     assert result["name"] == "hermes-agent-dev"
+
+
+def test_command_dispatch_returns_workflow_activation_for_targeted_skill(server):
+    sid = "test-session"
+    server._sessions[sid] = {"session_key": sid}
+
+    fake_skills = {"/omx-delegation": {"name": "omx-delegation", "description": "OMX workflow"}}
+    fake_msg = "Loaded OMX skill content here"
+
+    class _Activation:
+        def to_dict(self):
+            return {"workflow_id": "omx_delegation", "skill_name": "omx-delegation"}
+
+    with patch("agent.skill_commands.scan_skill_commands", return_value=fake_skills), \
+         patch("agent.skill_commands.build_skill_invocation_message", return_value=fake_msg), \
+         patch("agent.skill_commands.workflow_activation_for_skill_command", return_value=_Activation()):
+        resp = server.handle_request({
+            "id": "r2b",
+            "method": "command.dispatch",
+            "params": {"name": "omx-delegation", "session_id": sid},
+        })
+
+    assert "error" not in resp
+    result = resp["result"]
+    assert result["type"] == "skill"
+    assert result["workflow_activation"] == {
+        "workflow_id": "omx_delegation",
+        "skill_name": "omx-delegation",
+    }
+
+
+def test_prompt_submit_passes_workflow_activation_to_runner(server, monkeypatch):
+    sid = "test-session"
+    session = {
+        "session_key": sid,
+        "history": [],
+        "history_lock": threading.Lock(),
+        "running": False,
+        "agent": object(),
+    }
+    server._sessions[sid] = session
+
+    captured = {}
+
+    monkeypatch.setattr(server, "_start_agent_build", lambda _sid, _session: None)
+    monkeypatch.setattr(server, "_wait_agent", lambda _session, _rid: None)
+
+    def _fake_run_prompt_submit(rid, submit_sid, submit_session, text, workflow_activation=None):
+        captured["rid"] = rid
+        captured["sid"] = submit_sid
+        captured["session"] = submit_session
+        captured["text"] = text
+        captured["workflow_activation"] = workflow_activation
+
+    monkeypatch.setattr(server, "_run_prompt_submit", _fake_run_prompt_submit)
+
+    class _ImmediateThread:
+        def __init__(self, target=None, daemon=None):
+            self._target = target
+            self.daemon = daemon
+
+        def start(self):
+            if self._target:
+                self._target()
+
+    monkeypatch.setattr(server.threading, "Thread", _ImmediateThread)
+
+    activation = {"workflow_id": "omx_delegation", "skill_name": "omx-delegation"}
+    resp = server.handle_request({
+        "id": "r-submit",
+        "method": "prompt.submit",
+        "params": {"session_id": sid, "text": "run OMX", "workflow_activation": activation},
+    })
+
+    assert "error" not in resp
+    assert captured == {
+        "rid": "r-submit",
+        "sid": sid,
+        "session": session,
+        "text": "run OMX",
+        "workflow_activation": activation,
+    }
+
+
+def test_run_prompt_submit_activates_workflow_before_turn(server, monkeypatch):
+    calls = []
+
+    class _FakeAgent:
+        def activate_workflow(self, activation):
+            calls.append(("activate", activation))
+
+        def run_conversation(self, run_message, conversation_history=None, stream_callback=None):
+            calls.append(("run", getattr(self, "workflow_context", None), run_message))
+            return {"messages": [], "final_response": "done"}
+
+    session = {
+        "agent": _FakeAgent(),
+        "history": [],
+        "history_lock": threading.Lock(),
+        "attached_images": [],
+        "running": True,
+        "session_key": "test-session",
+    }
+
+    def _activate_and_store(self, activation):
+        calls.append(("activate", activation))
+        self.workflow_context = activation
+
+    monkeypatch.setattr(_FakeAgent, "activate_workflow", _activate_and_store)
+    monkeypatch.setattr(server, "_emit", lambda *args, **kwargs: None)
+
+    class _ImmediateThread:
+        def __init__(self, target=None, daemon=None):
+            self._target = target
+            self.daemon = daemon
+
+        def start(self):
+            if self._target:
+                self._target()
+
+    monkeypatch.setattr(server.threading, "Thread", _ImmediateThread)
+
+    activation = {"workflow_id": "omx_delegation", "skill_name": "omx-delegation"}
+    server._run_prompt_submit("rid", "sid", session, "hello", activation)
+
+    assert calls[0] == ("activate", activation)
+    assert calls[1] == ("run", activation, "hello")
+
+
+def test_input_detect_drop_image_is_detection_only(server, monkeypatch):
+    sid = "drop-session"
+    session = {"session_key": sid, "attached_images": []}
+    server._sessions[sid] = session
+
+    fake_cli = types.SimpleNamespace(
+        _detect_file_drop=lambda raw: {
+            "path": Path("/tmp/test-image.png"),
+            "remainder": "",
+            "is_image": True,
+        } if raw == "/tmp/test-image.png" else None
+    )
+
+    with patch.dict("sys.modules", {"cli": fake_cli}):
+        resp = server.handle_request({
+            "id": "r-drop",
+            "method": "input.detect_drop",
+            "params": {"session_id": sid, "text": "/tmp/test-image.png"},
+        })
+
+    assert "error" not in resp
+    assert resp["result"]["matched"] is True
+    assert resp["result"]["is_image"] is True
+    assert resp["result"]["path"] == "/tmp/test-image.png"
+    assert session["attached_images"] == []
 
 
 def test_command_dispatch_awaits_async_plugin_handler(server):

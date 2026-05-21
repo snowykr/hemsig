@@ -39,8 +39,9 @@ jobs:
   #   3. Job-level concurrency with cancel-in-progress: true ensures
   #      back-to-back pushes collapse to the newest; ref: main checkout
   #      always operates on the latest branch state.
-  #   4. Uses a GitHub App token (not GITHUB_TOKEN) so the fix commit
-  #      triggers downstream nix.yml verification.
+  #   4. Uses the fork-local GITHUB_TOKEN instead of upstream GitHub App
+  #      credentials. Run the Nix workflow manually if GitHub suppresses
+  #      token-authored follow-up workflow triggers.
   auto-fix-main:
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
@@ -49,17 +50,9 @@ jobs:
       group: auto-fix-main
       cancel-in-progress: true
     steps:
-      - name: Generate GitHub App token
-        id: app-token
-        uses: actions/create-github-app-token@7bfa3a4717ef143a604ee0a99d859b8886a96d00  # v1.9.3
-        with:
-          app-id: ${{ secrets.APP_ID }}
-          private-key: ${{ secrets.APP_PRIVATE_KEY }}
-
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
         with:
           ref: main
-          token: ${{ steps.app-token.outputs.token }}
 
       - uses: ./.github/actions/nix-setup
         with:

@@ -288,3 +288,59 @@ class TestUnifiedCronjobTool:
         assert updated["success"] is True
         stored = get_job(created["job_id"])
         assert stored["deliver"] == "telegram"
+
+    @pytest.mark.parametrize("deliver", ["webhook:route-1", "api_server:session-1"])
+    def test_create_rejects_unsupported_delivery_target(self, deliver):
+        result = json.loads(
+            cronjob(
+                action="create",
+                prompt="Daily briefing",
+                schedule="every 1h",
+                deliver=deliver,
+            )
+        )
+
+        assert result["success"] is False
+        assert "cron delivery" in result["error"]
+
+    def test_update_rejects_unsupported_delivery_target(self):
+        created = json.loads(cronjob(action="create", prompt="x", schedule="every 1h"))
+
+        updated = json.loads(
+            cronjob(
+                action="update",
+                job_id=created["job_id"],
+                deliver="webhook:route-1",
+            )
+        )
+
+        assert updated["success"] is False
+        assert "platform webhook is not supported for cron delivery" in updated["error"]
+
+    @pytest.mark.parametrize("deliver", ["oldchat:room-1", "legacyphone:+15551234567"])
+    def test_create_rejects_unknown_delivery_target(self, deliver):
+        result = json.loads(
+            cronjob(
+                action="create",
+                prompt="Daily briefing",
+                schedule="every 1h",
+                deliver=deliver,
+            )
+        )
+
+        assert result["success"] is False
+        assert "unknown platform" in result["error"]
+
+    def test_update_rejects_unknown_delivery_target(self):
+        created = json.loads(cronjob(action="create", prompt="x", schedule="every 1h"))
+
+        updated = json.loads(
+            cronjob(
+                action="update",
+                job_id=created["job_id"],
+                deliver="oldchat:room-1",
+            )
+        )
+
+        assert updated["success"] is False
+        assert "unknown platform" in updated["error"]

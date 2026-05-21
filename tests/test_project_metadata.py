@@ -11,44 +11,42 @@ def _load_optional_dependencies():
     return project["optional-dependencies"]
 
 
-def test_matrix_extra_linux_only_in_all():
-    """mautrix[encryption] depends on python-olm which is upstream-broken on
-    modern macOS (archived libolm, C++ errors with Clang 21+).  The [matrix]
-    extra is included in [all] but gated to Linux via a platform marker so
-    that ``hermes update`` doesn't fail on macOS."""
+def _load_nix_python_overlay_text() -> str:
+    nix_python_path = Path(__file__).resolve().parents[1] / "nix" / "python.nix"
+    return nix_python_path.read_text(encoding="utf-8")
+
+
+def test_removed_platform_extras_are_absent():
     optional_dependencies = _load_optional_dependencies()
+    allowed_extras = {
+        "modal", "daytona", "vercel", "dev", "messaging", "cron", "slack", "cli",
+        "tts-premium", "voice", "pty", "honcho", "mcp", "homeassistant", "acp",
+        "mistral", "bedrock", "termux", "google", "web", "rl", "yc-bench", "all",
+    }
 
-    assert "matrix" in optional_dependencies
-    # Must NOT be unconditional — python-olm has no macOS wheels.
-    assert "hermes-agent[matrix]" not in optional_dependencies["all"]
-    # Must be present with a Linux platform marker.
-    linux_gated = [
-        dep for dep in optional_dependencies["all"]
-        if "matrix" in dep and "linux" in dep
-    ]
-    assert linux_gated, "expected hermes-agent[matrix] with sys_platform=='linux' marker in [all]"
+    assert set(optional_dependencies).issubset(allowed_extras)
 
-
-def test_messaging_extra_includes_qrcode_for_weixin_setup():
-    optional_dependencies = _load_optional_dependencies()
-
-    messaging_extra = optional_dependencies["messaging"]
-    assert any(dep.startswith("qrcode") for dep in messaging_extra)
+    all_refs = [dep for dep in optional_dependencies["all"] if dep.startswith("hermes-agent[")]
+    for dep in all_refs:
+        extra = dep.removeprefix("hermes-agent[").removesuffix("]")
+        assert extra in allowed_extras
 
 
-def test_dingtalk_extra_includes_qrcode_for_qr_auth():
-    """DingTalk's QR-code device-flow auth (hermes_cli/dingtalk_auth.py)
-    needs the qrcode package."""
-    optional_dependencies = _load_optional_dependencies()
+def test_messaging_extra_keeps_supported_platform_dependencies():
+    messaging_extra = _load_optional_dependencies()["messaging"]
 
-    dingtalk_extra = optional_dependencies["dingtalk"]
-    assert any(dep.startswith("qrcode") for dep in dingtalk_extra)
+    assert any(dep.startswith("python-telegram-bot") for dep in messaging_extra)
+    assert any(dep.startswith("discord.py") for dep in messaging_extra)
+    assert any(dep.startswith("slack-bolt") for dep in messaging_extra)
 
 
-def test_feishu_extra_includes_qrcode_for_qr_login():
-    """Feishu's QR login flow (gateway/platforms/feishu.py) needs the
-    qrcode package."""
-    optional_dependencies = _load_optional_dependencies()
+def test_nix_overlay_no_longer_keeps_removed_platform_build_hacks():
+    nix_python = _load_nix_python_overlay_text()
 
-    feishu_extra = optional_dependencies["feishu"]
-    assert any(dep.startswith("qrcode") for dep in feishu_extra)
+    for removed_package in (
+        "alibabacloud-credentials-api",
+        "alibabacloud-endpoint-util",
+        "alibabacloud-gateway-spi",
+        "alibabacloud-tea",
+    ):
+        assert removed_package not in nix_python

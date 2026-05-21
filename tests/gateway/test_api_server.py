@@ -443,6 +443,26 @@ class TestHealthDetailedEndpoint:
                 assert data["platforms"] == {}
 
     @pytest.mark.asyncio
+    async def test_health_detailed_prunes_removed_runtime_platforms(self, adapter, tmp_path, monkeypatch):
+        """Removed runtime platforms should not be exposed by health serialization."""
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        (tmp_path / "gateway_state.json").write_text(json.dumps({
+            "gateway_state": "running",
+            "platforms": {
+                "telegram": {"state": "connected"},
+                "legacychat": {"state": "connected"},
+            },
+            "updated_at": "2026-04-14T00:00:00Z",
+        }))
+
+        app = _create_app(adapter)
+        async with TestClient(TestServer(app)) as cli:
+            resp = await cli.get("/health/detailed")
+            assert resp.status == 200
+            data = await resp.json()
+            assert data["platforms"] == {"telegram": {"state": "connected"}}
+
+    @pytest.mark.asyncio
     async def test_health_detailed_does_not_require_auth(self, auth_adapter):
         """Health detailed endpoint should be accessible without auth, like /health."""
         app = _create_app(auth_adapter)

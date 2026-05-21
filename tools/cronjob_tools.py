@@ -171,6 +171,12 @@ def _normalize_deliver_param(value: Any) -> Optional[str]:
     return text or None
 
 
+def _validate_deliver_param(deliver: Optional[str], *, origin: Optional[Dict[str, str]] = None) -> Optional[str]:
+    from cron.scheduler import _validate_cron_delivery_value
+
+    return _validate_cron_delivery_value(deliver, origin=origin)
+
+
 def _validate_cron_script_path(script: Optional[str]) -> Optional[str]:
     """Validate a cron job script path at the API boundary.
 
@@ -250,7 +256,7 @@ def cronjob(
     schedule: Optional[str] = None,
     name: Optional[str] = None,
     repeat: Optional[int] = None,
-    deliver: Optional[str] = None,
+    deliver: Optional[Union[str, List[str], tuple[str, ...]]] = None,
     include_disabled: bool = False,
     skill: Optional[str] = None,
     skills: Optional[List[str]] = None,
@@ -299,12 +305,17 @@ def cronjob(
                             success=False,
                         )
 
+            normalized_deliver = _normalize_deliver_param(deliver)
+            delivery_error = _validate_deliver_param(normalized_deliver, origin=_origin_from_env())
+            if delivery_error:
+                return tool_error(delivery_error, success=False)
+
             job = create_job(
                 prompt=prompt or "",
                 schedule=schedule,
                 name=name,
                 repeat=repeat,
-                deliver=_normalize_deliver_param(deliver),
+                deliver=normalized_deliver,
                 origin=_origin_from_env(),
                 skills=canonical_skills,
                 model=_normalize_optional_job_value(model),
@@ -385,7 +396,14 @@ def cronjob(
             if name is not None:
                 updates["name"] = name
             if deliver is not None:
-                updates["deliver"] = _normalize_deliver_param(deliver)
+                normalized_deliver = _normalize_deliver_param(deliver)
+                delivery_error = _validate_deliver_param(
+                    normalized_deliver,
+                    origin=_origin_from_env() or job.get("origin"),
+                )
+                if delivery_error:
+                    return tool_error(delivery_error, success=False)
+                updates["deliver"] = normalized_deliver
             if skills is not None or skill is not None:
                 canonical_skills = _canonical_skills(skill, skills)
                 updates["skills"] = canonical_skills
@@ -500,7 +518,7 @@ Important safety rule: cron-run sessions should not recursively schedule more cr
             },
             "deliver": {
                 "type": "string",
-                "description": "Omit this parameter to auto-deliver back to the current chat and topic (recommended). Auto-detection preserves thread/topic context. Only set explicitly when the user asks to deliver somewhere OTHER than the current conversation. Values: 'origin' (same as omitting), 'local' (no delivery, save only), or platform:chat_id:thread_id for a specific destination. Examples: 'telegram:-1001234567890:17585', 'discord:#engineering', 'sms:+15551234567'. WARNING: 'platform:chat_id' without :thread_id loses topic targeting."
+                "description": "Omit this parameter to auto-deliver back to the current chat and topic (recommended). Auto-detection preserves thread/topic context. Only set explicitly when the user asks to deliver somewhere OTHER than the current conversation. Values: 'origin' (same as omitting), 'local' (no delivery, save only), or platform:chat_id:thread_id for a specific destination. Examples: 'telegram:-1001234567890:17585', 'discord:#engineering', 'email:person@example.com'. WARNING: 'platform:chat_id' without :thread_id loses topic targeting."
             },
             "skills": {
                 "type": "array",

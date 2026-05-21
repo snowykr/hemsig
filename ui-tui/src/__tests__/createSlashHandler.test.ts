@@ -433,6 +433,7 @@ describe('createSlashHandler', () => {
 
   it('falls through to command.dispatch for skill commands and sends the message', async () => {
     const skillMessage = 'Use this skill to do X.\n\n## Steps\n1. First step'
+    const workflowActivation = { workflow_id: 'omx_delegation' }
 
     const ctx = buildCtx({
       gateway: {
@@ -444,7 +445,12 @@ describe('createSlashHandler', () => {
             }
 
             if (method === 'command.dispatch') {
-              return Promise.resolve({ type: 'skill', message: skillMessage, name: 'hermes-agent-dev' })
+              return Promise.resolve({
+                type: 'skill',
+                message: skillMessage,
+                name: 'hermes-agent-dev',
+                workflow_activation: workflowActivation
+              })
             }
 
             return Promise.resolve({})
@@ -459,7 +465,7 @@ describe('createSlashHandler', () => {
     await vi.waitFor(() => {
       expect(ctx.transcript.sys).toHaveBeenCalledWith('⚡ loading skill: hermes-agent-dev')
     })
-    expect(ctx.transcript.send).toHaveBeenCalledWith(skillMessage)
+    expect(ctx.transcript.send).toHaveBeenCalledWith(skillMessage, true, workflowActivation)
   })
 
   it('/history pages the current TUI transcript (user + assistant)', () => {
@@ -608,7 +614,7 @@ const buildComposer = () => ({
   enqueue: vi.fn(),
   hasSelection: false,
   paste: vi.fn(),
-  queueRef: { current: [] as string[] },
+  queueRef: { current: [] },
   selection: { copySelection: vi.fn(async () => '') },
   setInput: vi.fn()
 })

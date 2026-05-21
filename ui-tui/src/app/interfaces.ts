@@ -3,7 +3,7 @@ import type { MutableRefObject, ReactNode, RefObject, SetStateAction } from 'rea
 
 import type { PasteEvent } from '../components/textInput.js'
 import type { GatewayClient } from '../gatewayClient.js'
-import type { ImageAttachResponse } from '../gatewayTypes.js'
+import type { ImageAttachResponse, WorkflowActivation } from '../gatewayTypes.js'
 import type { RpcResult } from '../lib/rpc.js'
 import type { Theme } from '../theme.js'
 import type {
@@ -132,10 +132,16 @@ export interface ComposerPasteResult {
 
 export type MaybePromise<T> = Promise<T> | T
 
+export interface QueuedSubmission {
+  sid?: string
+  text: string
+  workflowActivation?: WorkflowActivation
+}
+
 export interface ComposerActions {
   clearIn: () => void
-  dequeue: () => string | undefined
-  enqueue: (text: string) => void
+  dequeue: () => QueuedSubmission | undefined
+  enqueue: (entry: QueuedSubmission | string) => void
   handleTextPaste: (event: PasteEvent) => MaybePromise<ComposerPasteResult | null>
   openEditor: () => Promise<void>
   pushHistory: (text: string) => void
@@ -154,7 +160,7 @@ export interface ComposerRefs {
   historyDraftRef: MutableRefObject<string>
   historyRef: MutableRefObject<string[]>
   queueEditRef: MutableRefObject<null | number>
-  queueRef: MutableRefObject<string[]>
+  queueRef: MutableRefObject<QueuedSubmission[]>
   submitRef: MutableRefObject<(value: string) => void>
 }
 
@@ -187,7 +193,7 @@ export interface InputHandlerActions {
   answerClarify: (answer: string) => void
   appendMessage: (msg: Msg) => void
   die: () => void
-  dispatchSubmission: (full: string) => void
+  dispatchSubmission: (full: QueuedSubmission | string) => void
   guardBusySessionSwitch: (what?: string) => boolean
   newSession: (msg?: string) => void
   sys: (text: string) => void
@@ -257,10 +263,10 @@ export interface GatewayEventHandlerContext {
 
 export interface SlashHandlerContext {
   composer: {
-    enqueue: (text: string) => void
+    enqueue: (entry: QueuedSubmission | string) => void
     hasSelection: boolean
     paste: (quiet?: boolean) => void
-    queueRef: MutableRefObject<string[]>
+    queueRef: MutableRefObject<QueuedSubmission[]>
     selection: SelectionApi
     setInput: StateSetter<string>
   }
@@ -284,7 +290,7 @@ export interface SlashHandlerContext {
   transcript: {
     page: (text: string, title?: string) => void
     panel: (title: string, sections: PanelSection[]) => void
-    send: (text: string) => void
+    send: (text: string, showUserMessage?: boolean, workflowActivation?: WorkflowActivation) => void
     setHistoryItems: StateSetter<Msg[]>
     sys: (text: string) => void
     trimLastExchange: (items: Msg[]) => Msg[]

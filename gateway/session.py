@@ -60,11 +60,17 @@ from .config import (
     SessionResetPolicy,  # noqa: F401 — re-exported via gateway/__init__.py
     HomeChannel,
 )
-from .whatsapp_identity import (
-    canonical_whatsapp_identifier,
-    normalize_whatsapp_identifier,  # noqa: F401 - re-exported for gateway.session callers
-)
 from utils import atomic_replace
+
+
+def _persisted_platform_value(
+    platform: Optional[Platform],
+    platform_name: Optional[str] = None,
+) -> Optional[str]:
+    if platform is not None:
+        return platform.value
+    text = str(platform_name or "").strip()
+    return text or None
 
 
 @dataclass
@@ -77,18 +83,19 @@ class SessionSource:
     2. Inject context into the system prompt
     3. Track origin for cron job delivery
     """
-    platform: Platform
+    platform: Optional[Platform]
     chat_id: str
+    platform_name: Optional[str] = None
     chat_name: Optional[str] = None
     chat_type: str = "dm"  # "dm", "group", "channel", "thread"
     user_id: Optional[str] = None
     user_name: Optional[str] = None
     thread_id: Optional[str] = None  # For forum topics, Discord threads, etc.
     chat_topic: Optional[str] = None  # Channel topic/description (Discord, Slack)
-    user_id_alt: Optional[str] = None  # Platform-specific stable alt ID (Signal UUID, Feishu union_id)
+    user_id_alt: Optional[str] = None  # Platform-specific stable alternate ID (e.g. Signal UUID)
     chat_id_alt: Optional[str] = None  # Signal group internal ID
     is_bot: bool = False  # True when the message author is a bot/webhook (Discord)
-    guild_id: Optional[str] = None  # Discord guild / Slack workspace / Matrix server scope
+    guild_id: Optional[str] = None  # Discord guild / Slack workspace scope
     parent_chat_id: Optional[str] = None  # Parent channel when chat_id refers to a thread
     message_id: Optional[str] = None  # ID of the triggering message (for pin/reply/react)
     
@@ -115,7 +122,7 @@ class SessionSource:
     
     def to_dict(self) -> Dict[str, Any]:
         d = {
-            "platform": self.platform.value,
+            "platform": _persisted_platform_value(self.platform, self.platform_name),
             "chat_id": self.chat_id,
             "chat_name": self.chat_name,
             "chat_type": self.chat_type,
@@ -141,6 +148,34 @@ class SessionSource:
         return cls(
             platform=Platform(data["platform"]),
             chat_id=str(data["chat_id"]),
+            platform_name=None,
+            chat_name=data.get("chat_name"),
+            chat_type=data.get("chat_type", "dm"),
+            user_id=data.get("user_id"),
+            user_name=data.get("user_name"),
+            thread_id=data.get("thread_id"),
+            chat_topic=data.get("chat_topic"),
+            user_id_alt=data.get("user_id_alt"),
+            chat_id_alt=data.get("chat_id_alt"),
+            guild_id=data.get("guild_id"),
+            parent_chat_id=data.get("parent_chat_id"),
+            message_id=data.get("message_id"),
+        )
+
+    @classmethod
+    def from_persisted_dict(cls, data: Dict[str, Any]) -> "SessionSource":
+        raw_platform = _persisted_platform_value(None, data.get("platform"))
+        platform = None
+        if raw_platform:
+            try:
+                platform = Platform(raw_platform)
+                raw_platform = None
+            except ValueError:
+                pass
+        return cls(
+            platform=platform,
+            chat_id=str(data["chat_id"]),
+            platform_name=raw_platform,
             chat_name=data.get("chat_name"),
             chat_type=data.get("chat_type", "dm"),
             user_id=data.get("user_id"),
@@ -197,10 +232,8 @@ class SessionContext:
 
 
 _PII_SAFE_PLATFORMS = frozenset({
-    Platform.WHATSAPP,
     Platform.SIGNAL,
     Platform.TELEGRAM,
-    Platform.BLUEBUBBLES,
 })
 """Platforms where user IDs can be safely redacted (no in-message mention system
 that requires raw IDs).  Discord is excluded because mentions use ``<@user_id>``
@@ -230,8 +263,6 @@ def _discord_tools_loaded() -> bool:
         return "discord" in enabled or "discord_admin" in enabled
     except Exception:
         return False
-
-
 def build_session_context_prompt(
     context: SessionContext,
     *,
@@ -257,7 +288,9 @@ def build_session_context_prompt(
     if not _is_pii_safe:
         try:
             from gateway.platform_registry import platform_registry
-            entry = platform_registry.get(context.source.platform.value)
+
+            source_platform = context.source.platform
+            entry = platform_registry.get(source_platform.value) if source_platform else None
             if entry and entry.pii_safe:
                 _is_pii_safe = True
         except Exception:
@@ -269,7 +302,11 @@ def build_session_context_prompt(
     ]
 
     # Source info
-    platform_name = context.source.platform.value.title()
+    platform_value = _persisted_platform_value(
+        context.source.platform,
+        context.source.platform_name,
+    ) or "unknown"
+    platform_name = platform_value.title()
     if context.source.platform == Platform.LOCAL:
         lines.append(f"**Source:** {platform_name} (the machine running this agent)")
     else:
@@ -357,26 +394,6 @@ def build_session_context_prompt(
                 "Do not promise to perform these actions. If the user asks, explain "
                 "that you can only read messages sent directly to you and respond."
             )
-    elif context.source.platform == Platform.BLUEBUBBLES:
-        lines.append("")
-        lines.append(
-            "**Platform notes:** You are responding via iMessage. "
-            "Keep responses short and conversational — think texts, not essays. "
-            "Structure longer replies as separate short thoughts, each separated "
-            "by a blank line (double newline). Each block between blank lines "
-            "will be delivered as its own iMessage bubble, so write accordingly: "
-            "one idea per bubble, 1–3 sentences each. "
-            "If the user needs a detailed answer, give the short version first "
-            "and offer to elaborate."
-        )
-    elif context.source.platform == Platform.YUANBAO:
-        lines.append("")
-        lines.append(
-            "**Platform notes:** You are running inside Yuanbao. "
-            "You CAN send private (DM) messages via the send_message tool. "
-            "Use target='yuanbao:direct:<account_id>' for DM "
-            "and target='yuanbao:group:<group_code>' for group chat."
-        )
 
     # Connected platforms
     platforms_list = ["local (files on this machine)"]
@@ -443,6 +460,7 @@ class SessionEntry:
     # Display metadata
     display_name: Optional[str] = None
     platform: Optional[Platform] = None
+    platform_name: Optional[str] = None
     chat_type: str = "dm"
     
     # Token tracking
@@ -503,13 +521,13 @@ class SessionEntry:
     working_dir: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
-        result = {
+        result: Dict[str, Any] = {
             "session_key": self.session_key,
             "session_id": self.session_id,
             "created_at": self.created_at.isoformat(),
             "updated_at": self.updated_at.isoformat(),
             "display_name": self.display_name,
-            "platform": self.platform.value if self.platform else None,
+            "platform": _persisted_platform_value(self.platform, self.platform_name),
             "chat_type": self.chat_type,
             "input_tokens": self.input_tokens,
             "output_tokens": self.output_tokens,
@@ -544,10 +562,7 @@ class SessionEntry:
         
         platform = None
         if data.get("platform"):
-            try:
-                platform = Platform(data["platform"])
-            except ValueError as e:
-                logger.debug("Unknown platform value %r: %s", data["platform"], e)
+            platform = Platform(data["platform"])
 
         last_resume_marked_at = None
         _lrma = data.get("last_resume_marked_at")
@@ -565,6 +580,57 @@ class SessionEntry:
             origin=origin,
             display_name=data.get("display_name"),
             platform=platform,
+            chat_type=data.get("chat_type", "dm"),
+            input_tokens=data.get("input_tokens", 0),
+            output_tokens=data.get("output_tokens", 0),
+            cache_read_tokens=data.get("cache_read_tokens", 0),
+            cache_write_tokens=data.get("cache_write_tokens", 0),
+            total_tokens=data.get("total_tokens", 0),
+            last_prompt_tokens=data.get("last_prompt_tokens", 0),
+            estimated_cost_usd=data.get("estimated_cost_usd", 0.0),
+            cost_status=data.get("cost_status", "unknown"),
+            expiry_finalized=data.get("expiry_finalized", data.get("memory_flushed", False)),
+            suspended=data.get("suspended", False),
+            resume_pending=data.get("resume_pending", False),
+            resume_reason=data.get("resume_reason"),
+            last_resume_marked_at=last_resume_marked_at,
+            project_dir=data.get("project_dir"),
+            working_dir=data.get("working_dir"),
+            is_fresh_reset=data.get("is_fresh_reset", False),
+        )
+
+    @classmethod
+    def from_persisted_dict(cls, data: Dict[str, Any]) -> "SessionEntry":
+        origin = None
+        if "origin" in data and data["origin"]:
+            origin = SessionSource.from_persisted_dict(data["origin"])
+
+        raw_platform = _persisted_platform_value(None, data.get("platform"))
+        platform = None
+        if raw_platform:
+            try:
+                platform = Platform(raw_platform)
+                raw_platform = None
+            except ValueError:
+                pass
+
+        last_resume_marked_at = None
+        _lrma = data.get("last_resume_marked_at")
+        if _lrma:
+            try:
+                last_resume_marked_at = datetime.fromisoformat(_lrma)
+            except (TypeError, ValueError):
+                last_resume_marked_at = None
+
+        return cls(
+            session_key=data["session_key"],
+            session_id=data["session_id"],
+            created_at=datetime.fromisoformat(data["created_at"]),
+            updated_at=datetime.fromisoformat(data["updated_at"]),
+            origin=origin,
+            display_name=data.get("display_name"),
+            platform=platform,
+            platform_name=raw_platform,
             chat_type=data.get("chat_type", "dm"),
             input_tokens=data.get("input_tokens", 0),
             output_tokens=data.get("output_tokens", 0),
@@ -634,12 +700,9 @@ def build_session_key(
         shared session per chat.
       - Without identifiers, messages fall back to one session per platform/chat_type.
     """
-    platform = source.platform.value
+    platform = _persisted_platform_value(source.platform, source.platform_name) or "unknown"
     if source.chat_type == "dm":
         dm_chat_id = source.chat_id
-        if source.platform == Platform.WHATSAPP:
-            dm_chat_id = canonical_whatsapp_identifier(source.chat_id)
-
         if dm_chat_id:
             if source.thread_id:
                 return f"agent:main:{platform}:dm:{dm_chat_id}:{source.thread_id}"
@@ -649,11 +712,6 @@ def build_session_key(
         return f"agent:main:{platform}:dm"
 
     participant_id = source.user_id_alt or source.user_id
-    if participant_id and source.platform == Platform.WHATSAPP:
-        # Same JID/LID-flip bug as the DM case: without canonicalisation, a
-        # single group member gets two isolated per-user sessions when the
-        # bridge reshuffles alias forms.
-        participant_id = canonical_whatsapp_identifier(str(participant_id)) or participant_id
     key_parts = ["agent:main", platform, source.chat_type]
 
     if source.chat_id:
@@ -718,9 +776,9 @@ class SessionStore:
                     data = json.load(f)
                     for key, entry_data in data.items():
                         try:
-                            self._entries[key] = SessionEntry.from_dict(entry_data)
+                            self._entries[key] = SessionEntry.from_persisted_dict(entry_data)
                         except (ValueError, KeyError):
-                            # Skip entries with unknown/removed platform values
+                            # Skip malformed entries or unknown platform values.
                             continue
             except Exception as e:
                 print(f"[gateway] Warning: Failed to load sessions: {e}")
@@ -879,7 +937,9 @@ class SessionStore:
         # SQLite calls are made outside the lock to avoid holding it during I/O.
         # All _entries / _loaded mutations are protected by self._lock.
         db_end_session_id = None
-        db_create_kwargs = None
+        db_create_session_id: Optional[str] = None
+        db_create_source: Optional[str] = None
+        db_create_user_id: Optional[str] = None
 
         with self._lock:
             self._ensure_loaded_locked()
@@ -944,11 +1004,9 @@ class SessionStore:
 
             self._entries[session_key] = entry
             self._save()
-            db_create_kwargs = {
-                "session_id": session_id,
-                "source": source.platform.value,
-                "user_id": source.user_id,
-            }
+            db_create_session_id = session_id
+            db_create_source = _persisted_platform_value(source.platform, source.platform_name) or "unknown"
+            db_create_user_id = source.user_id
 
         # SQLite operations outside the lock
         if self._db and db_end_session_id:
@@ -957,9 +1015,13 @@ class SessionStore:
             except Exception as e:
                 logger.debug("Session DB operation failed: %s", e)
 
-        if self._db and db_create_kwargs:
+        if self._db and db_create_session_id and db_create_source:
             try:
-                self._db.create_session(**db_create_kwargs)
+                self._db.create_session(
+                    session_id=db_create_session_id,
+                    source=db_create_source,
+                    user_id=db_create_user_id,
+                )
             except Exception as e:
                 print(f"[gateway] Warning: Failed to create SQLite session: {e}")
 
@@ -968,7 +1030,7 @@ class SessionStore:
     def update_session(
         self,
         session_key: str,
-        last_prompt_tokens: int = None,
+        last_prompt_tokens: Optional[int] = None,
     ) -> None:
         """Update lightweight session metadata after an interaction."""
         with self._lock:
@@ -1157,7 +1219,9 @@ class SessionStore:
     def reset_session(self, session_key: str) -> Optional[SessionEntry]:
         """Force reset a session, creating a new session ID."""
         db_end_session_id = None
-        db_create_kwargs = None
+        db_create_session_id: Optional[str] = None
+        db_create_source: Optional[str] = None
+        db_create_user_id: Optional[str] = None
         new_entry = None
 
         with self._lock:
@@ -1180,6 +1244,7 @@ class SessionStore:
                 origin=old_entry.origin,
                 display_name=old_entry.display_name,
                 platform=old_entry.platform,
+                platform_name=old_entry.platform_name,
                 chat_type=old_entry.chat_type,
                 is_fresh_reset=True,
                 project_dir=old_entry.project_dir,
@@ -1188,11 +1253,9 @@ class SessionStore:
 
             self._entries[session_key] = new_entry
             self._save()
-            db_create_kwargs = {
-                "session_id": session_id,
-                "source": old_entry.platform.value if old_entry.platform else "unknown",
-                "user_id": old_entry.origin.user_id if old_entry.origin else None,
-            }
+            db_create_session_id = session_id
+            db_create_source = _persisted_platform_value(old_entry.platform, old_entry.platform_name) or "unknown"
+            db_create_user_id = old_entry.origin.user_id if old_entry.origin else None
 
         if self._db and db_end_session_id:
             try:
@@ -1200,9 +1263,13 @@ class SessionStore:
             except Exception as e:
                 logger.debug("Session DB operation failed: %s", e)
 
-        if self._db and db_create_kwargs:
+        if self._db and db_create_session_id and db_create_source:
             try:
-                self._db.create_session(**db_create_kwargs)
+                self._db.create_session(
+                    session_id=db_create_session_id,
+                    source=db_create_source,
+                    user_id=db_create_user_id,
+                )
             except Exception as e:
                 logger.debug("Session DB operation failed: %s", e)
 
@@ -1243,6 +1310,7 @@ class SessionStore:
                 origin=old_entry.origin,
                 display_name=old_entry.display_name,
                 platform=old_entry.platform,
+                platform_name=old_entry.platform_name,
                 chat_type=old_entry.chat_type,
                 project_dir=old_entry.project_dir,
                 working_dir=old_entry.working_dir,

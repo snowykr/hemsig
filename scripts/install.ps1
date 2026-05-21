@@ -768,7 +768,7 @@ function Start-GatewayIfConfigured {
 
     $hasMessaging = $false
     $content = Get-Content $envPath -ErrorAction SilentlyContinue
-    foreach ($var in @("TELEGRAM_BOT_TOKEN", "DISCORD_BOT_TOKEN", "SLACK_BOT_TOKEN", "SLACK_APP_TOKEN", "WHATSAPP_ENABLED")) {
+    foreach ($var in @("TELEGRAM_BOT_TOKEN", "DISCORD_BOT_TOKEN", "SLACK_BOT_TOKEN", "SLACK_APP_TOKEN")) {
         $match = $content | Where-Object { $_ -match "^${var}=.+" -and $_ -notmatch "your-token-here" }
         if ($match) { $hasMessaging = $true; break }
     }
@@ -778,24 +778,6 @@ function Start-GatewayIfConfigured {
     $hermesCmd = "$InstallDir\venv\Scripts\hermes.exe"
     if (-not (Test-Path $hermesCmd)) {
         $hermesCmd = "hermes"
-    }
-
-    # If WhatsApp is enabled but not yet paired, run foreground for QR scan
-    $whatsappEnabled = $content | Where-Object { $_ -match "^WHATSAPP_ENABLED=true" }
-    $whatsappSession = "$HermesHome\whatsapp\session\creds.json"
-    if ($whatsappEnabled -and -not (Test-Path $whatsappSession)) {
-        Write-Host ""
-        Write-Info "WhatsApp is enabled but not yet paired."
-        Write-Info "Running 'hermes whatsapp' to pair via QR code..."
-        Write-Host ""
-        $response = Read-Host "Pair WhatsApp now? [Y/n]"
-        if ($response -eq "" -or $response -match "^[Yy]") {
-            try {
-                & $hermesCmd whatsapp
-            } catch {
-                # Expected after pairing completes
-            }
-        }
     }
 
     Write-Host ""

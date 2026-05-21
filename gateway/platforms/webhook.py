@@ -136,7 +136,7 @@ class WebhookAdapter(BasePlatformAdapter):
                     raise ValueError(
                         f"[webhook] Route '{name}' has deliver_only=true but "
                         f"deliver is '{deliver}'. Direct delivery requires a "
-                        f"real target (telegram, discord, slack, github_comment, etc.)."
+                        f"real target (telegram, discord, slack, signal, email, homeassistant, github_comment, etc.)."
                     )
 
         app = web.Application()
@@ -205,10 +205,7 @@ class WebhookAdapter(BasePlatformAdapter):
         # Cross-platform delivery — any platform with a gateway adapter.
         # Check both built-in names and plugin-registered platforms.
         _BUILTIN_DELIVER_PLATFORMS = {
-            "telegram", "discord", "slack", "signal", "sms", "whatsapp",
-            "matrix", "mattermost", "homeassistant", "email", "dingtalk",
-            "feishu", "wecom", "wecom_callback", "weixin", "bluebubbles",
-            "qqbot", "yuanbao",
+            "telegram", "discord", "slack", "signal", "homeassistant", "email",
         }
         _is_known_platform = deliver_type in _BUILTIN_DELIVER_PLATFORMS
         if not _is_known_platform:

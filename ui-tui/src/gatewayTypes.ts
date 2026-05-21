@@ -43,10 +43,15 @@ export interface SlashExecResponse {
   warning?: string
 }
 
+export interface WorkflowActivation {
+  [key: string]: unknown
+  workflow_id?: string
+}
+
 export type CommandDispatchResponse =
   | { output?: string; type: 'exec' | 'plugin' }
   | { target: string; type: 'alias' }
-  | { message?: string; name: string; type: 'skill' }
+  | { message?: string; name: string; type: 'skill'; workflow_activation?: WorkflowActivation }
   | { message: string; type: 'send' }
 
 // ── Config ───────────────────────────────────────────────────────────
@@ -253,6 +258,8 @@ export interface InputDetectDropResponse {
   is_image?: boolean
   matched?: boolean
   name?: string
+  path?: string
+  remainder?: string
   text?: string
   token_estimate?: number
   width?: number

@@ -1,8 +1,5 @@
 """Tests for Tencent TokenHub provider support (Hy3 Preview)."""
 
-import json
-import os
-
 import pytest
 
 from hermes_cli.auth import (
@@ -415,39 +412,6 @@ class TestTencentTokenhubCLIDispatch:
 
 
 # =============================================================================
-# Remote model catalog (model-catalog.json)
-# =============================================================================
-
-
-class TestTencentTokenhubModelCatalogJSON:
-    """Verify tencent/hy3-preview:free is present in the website model-catalog.json."""
-
-    def test_in_model_catalog_json(self):
-        catalog_path = os.path.join(
-            os.path.dirname(__file__),
-            "..", "..",
-            "website", "static", "api", "model-catalog.json",
-        )
-        if not os.path.isfile(catalog_path):
-            pytest.skip("model-catalog.json not found in workspace")
-        with open(catalog_path) as f:
-            data = json.load(f)
-        # Collect all model IDs across all provider lists.
-        # providers is a dict keyed by provider name, each value has a "models" list.
-        all_ids = set()
-        providers = data.get("providers", {})
-        if isinstance(providers, dict):
-            for provider_entry in providers.values():
-                for model in provider_entry.get("models", []):
-                    all_ids.add(model.get("id", ""))
-        else:
-            for provider_entry in providers:
-                for model in provider_entry.get("models", []):
-                    all_ids.add(model.get("id", ""))
-        assert "tencent/hy3-preview:free" in all_ids
-
-
-# =============================================================================
 # determine_api_mode (providers.py)
 # =============================================================================
 
@@ -491,4 +455,3 @@ class TestTencentTokenhubKnownProviderNames:
     def test_alias_known(self, alias):
         from hermes_cli.models import _KNOWN_PROVIDER_NAMES
         assert alias in _KNOWN_PROVIDER_NAMES
-

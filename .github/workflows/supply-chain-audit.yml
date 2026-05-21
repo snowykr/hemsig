@@ -6,8 +6,8 @@ on:
     paths:
       - '**/*.py'
       - '**/*.pth'
-      - '**/setup.py'
-      - '**/setup.cfg'
+      - 'setup.py'
+      - 'setup.cfg'
       - '**/sitecustomize.py'
       - '**/usercustomize.py'
       - '**/__init__.pth'
@@ -94,9 +94,11 @@ jobs:
           "
           fi
 
-          # --- Install-hook files (setup.py/sitecustomize/usercustomize/__init__.pth) ---
-          # These execute during pip install or interpreter startup.
-          SETUP_HITS=$(git diff --name-only "$BASE".."$HEAD" | grep -E '(^|/)(setup\.py|setup\.cfg|sitecustomize\.py|usercustomize\.py|__init__\.pth)$' || true)
+          # --- Install-hook files (root setup.py/setup.cfg, sitecustomize/usercustomize/__init__.pth) ---
+          # Root setup.py/setup.cfg can execute during package install. Arbitrary
+          # package modules named setup.py (for example hermes_cli/setup.py) are
+          # ordinary importable modules, not install hooks.
+          SETUP_HITS=$(git diff --name-only "$BASE".."$HEAD" | grep -E '^(setup\.py|setup\.cfg)$|(^|/)(sitecustomize\.py|usercustomize\.py|__init__\.pth)$' || true)
           if [ -n "$SETUP_HITS" ]; then
             FINDINGS="${FINDINGS}
           ### 🚨 CRITICAL: Install-hook file added or modified

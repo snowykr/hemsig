@@ -113,9 +113,9 @@ def test_spotify_interactive_setup_persists_client_id(
     # Default redirect URI should NOT be persisted.
     assert "HERMES_SPOTIFY_REDIRECT_URI" not in env_text
 
-    # Docs URL should appear in wizard output so users can find the guide.
+    # Local setup help should appear in wizard output without linking to removed web docs.
     output = capsys.readouterr().out
-    assert auth_mod.SPOTIFY_DOCS_URL in output
+    assert auth_mod.SPOTIFY_HELP_TEXT in output
 
 
 def test_spotify_interactive_setup_empty_aborts(

@@ -30,8 +30,6 @@ logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).parent.parent.resolve()
 
-_DOCS_BASE = "https://hermes-agent.nousresearch.com/docs"
-
 
 def _model_config_dict(config: Dict[str, Any]) -> Dict[str, Any]:
     current_model = config.get("model")
@@ -778,7 +776,7 @@ def setup_model_provider(config: dict, *, quick: bool = False):
 
     print_header("Inference Provider")
     print_info("Choose how to connect to your main chat model.")
-    print_info(f"   Guide: {_DOCS_BASE}/integrations/providers")
+    print_info("   Guide: run `hermes model --help` for provider setup options")
     print()
 
     # Delegate to the shared hermes model flow — handles provider picker,
@@ -1275,7 +1273,7 @@ def setup_terminal_backend(config: dict):
     print_header("Terminal Backend")
     print_info("Choose where Hermes runs shell commands and code.")
     print_info("This affects tool execution, file access, and isolation.")
-    print_info(f"   Guide: {_DOCS_BASE}/developer-guide/environments")
+    print_info("   Guide: run `hermes tools --help` and inspect tools/environments/ for backend details")
     print()
 
     current_backend = cfg_get(config, "terminal", "backend", default="local")
@@ -1669,7 +1667,7 @@ def setup_agent_settings(config: dict):
     """Configure agent behavior: iterations, progress display, compression, session reset."""
 
     print_header("Agent Settings")
-    print_info(f"   Guide: {_DOCS_BASE}/user-guide/configuration")
+    print_info("   Guide: run `hermes config --help` or `hermes config edit`")
     print()
 
     # ── Max Iterations ──
@@ -2001,8 +1999,6 @@ def _setup_slack():
     print_info("   3. Install to Workspace: Settings → Install App")
     print_info("   4. After installing, invite the bot to channels: /invite @YourBot")
     print()
-    print_info("   Full guide: https://hermes-agent.nousresearch.com/docs/user-guide/messaging/slack/")
-    print()
 
     # Generate and write manifest up-front so the user can paste it into
     # the "Create from manifest" flow instead of clicking through scopes /
@@ -2077,206 +2073,6 @@ def _write_slack_manifest_and_instruct():
         )
 
 
-def _setup_matrix():
-    """Configure Matrix credentials."""
-    print_header("Matrix")
-    existing = get_env_value("MATRIX_ACCESS_TOKEN") or get_env_value("MATRIX_PASSWORD")
-    if existing:
-        print_info("Matrix: already configured")
-        if not prompt_yes_no("Reconfigure Matrix?", False):
-            return
-
-    print_info("Works with any Matrix homeserver (Synapse, Conduit, Dendrite, or matrix.org).")
-    print_info("   1. Create a bot user on your homeserver, or use your own account")
-    print_info("   2. Get an access token from Element, or provide user ID + password")
-    print()
-    homeserver = prompt("Homeserver URL (e.g. https://matrix.example.org)")
-    if homeserver:
-        save_env_value("MATRIX_HOMESERVER", homeserver.rstrip("/"))
-
-    print()
-    print_info("Auth: provide an access token (recommended), or user ID + password.")
-    token = prompt("Access token (leave empty for password login)", password=True)
-    if token:
-        save_env_value("MATRIX_ACCESS_TOKEN", token)
-        user_id = prompt("User ID (@bot:server — optional, will be auto-detected)")
-        if user_id:
-            save_env_value("MATRIX_USER_ID", user_id)
-        print_success("Matrix access token saved")
-    else:
-        user_id = prompt("User ID (@bot:server)")
-        if user_id:
-            save_env_value("MATRIX_USER_ID", user_id)
-        password = prompt("Password", password=True)
-        if password:
-            save_env_value("MATRIX_PASSWORD", password)
-            print_success("Matrix credentials saved")
-
-    if token or get_env_value("MATRIX_PASSWORD"):
-        print()
-        want_e2ee = prompt_yes_no("Enable end-to-end encryption (E2EE)?", False)
-        if want_e2ee:
-            save_env_value("MATRIX_ENCRYPTION", "true")
-            print_success("E2EE enabled")
-
-        matrix_pkg = "mautrix[encryption]" if want_e2ee else "mautrix"
-        try:
-            __import__("mautrix")
-        except ImportError:
-            print_info(f"Installing {matrix_pkg}...")
-            import subprocess
-            uv_bin = shutil.which("uv")
-            if uv_bin:
-                result = subprocess.run(
-                    [uv_bin, "pip", "install", "--python", sys.executable, matrix_pkg],
-                    capture_output=True, text=True,
-                )
-            else:
-                result = subprocess.run(
-                    [sys.executable, "-m", "pip", "install", matrix_pkg],
-                    capture_output=True, text=True,
-                )
-            if result.returncode == 0:
-                print_success(f"{matrix_pkg} installed")
-            else:
-                print_warning(f"Install failed — run manually: pip install '{matrix_pkg}'")
-                if result.stderr:
-                    print_info(f"  Error: {result.stderr.strip().splitlines()[-1]}")
-
-        print()
-        print_info("🔒 Security: Restrict who can use your bot")
-        print_info("   Matrix user IDs look like @username:server")
-        print()
-        allowed_users = prompt("Allowed user IDs (comma-separated, leave empty for open access)")
-        if allowed_users:
-            save_env_value("MATRIX_ALLOWED_USERS", allowed_users.replace(" ", ""))
-            print_success("Matrix allowlist configured")
-        else:
-            print_info("⚠️  No allowlist set - anyone who can message the bot can use it!")
-
-        print()
-        print_info("📬 Home Room: where Hermes delivers cron job results and notifications.")
-        print_info("   Room IDs look like !abc123:server (shown in Element room settings)")
-        print_info("   You can also set this later by typing /set-home in a Matrix room.")
-        home_room = prompt("Home room ID (leave empty to set later with /set-home)")
-        if home_room:
-            save_env_value("MATRIX_HOME_ROOM", home_room)
-
-
-def _setup_mattermost():
-    """Configure Mattermost bot credentials."""
-    print_header("Mattermost")
-    existing = get_env_value("MATTERMOST_TOKEN")
-    if existing:
-        print_info("Mattermost: already configured")
-        if not prompt_yes_no("Reconfigure Mattermost?", False):
-            return
-
-    print_info("Works with any self-hosted Mattermost instance.")
-    print_info("   1. In Mattermost: Integrations → Bot Accounts → Add Bot Account")
-    print_info("   2. Copy the bot token")
-    print()
-    mm_url = prompt("Mattermost server URL (e.g. https://mm.example.com)")
-    if mm_url:
-        save_env_value("MATTERMOST_URL", mm_url.rstrip("/"))
-    token = prompt("Bot token", password=True)
-    if not token:
-        return
-    save_env_value("MATTERMOST_TOKEN", token)
-    print_success("Mattermost token saved")
-
-    print()
-    print_info("🔒 Security: Restrict who can use your bot")
-    print_info("   To find your user ID: click your avatar → Profile")
-    print_info("   or use the API: GET /api/v4/users/me")
-    print()
-    allowed_users = prompt("Allowed user IDs (comma-separated, leave empty for open access)")
-    if allowed_users:
-        save_env_value("MATTERMOST_ALLOWED_USERS", allowed_users.replace(" ", ""))
-        print_success("Mattermost allowlist configured")
-    else:
-        print_info("⚠️  No allowlist set - anyone who can message the bot can use it!")
-
-    print()
-    print_info("📬 Home Channel: where Hermes delivers cron job results and notifications.")
-    print_info("   To get a channel ID: click channel name → View Info → copy the ID")
-    print_info("   You can also set this later by typing /set-home in a Mattermost channel.")
-    home_channel = prompt("Home channel ID (leave empty to set later with /set-home)")
-    if home_channel:
-        save_env_value("MATTERMOST_HOME_CHANNEL", home_channel)
-    print_info("   Open config in your editor:  hermes config edit")
-
-
-def _setup_bluebubbles():
-    """Configure BlueBubbles iMessage gateway."""
-    print_header("BlueBubbles (iMessage)")
-    existing = get_env_value("BLUEBUBBLES_SERVER_URL")
-    if existing:
-        print_info("BlueBubbles: already configured")
-        if not prompt_yes_no("Reconfigure BlueBubbles?", False):
-            return
-
-    print_info("Connects Hermes to iMessage via BlueBubbles — a free, open-source")
-    print_info("macOS server that bridges iMessage to any device.")
-    print_info("   Requires a Mac running BlueBubbles Server v1.0.0+")
-    print_info("   Download: https://bluebubbles.app/")
-    print()
-    print_info("In BlueBubbles Server → Settings → API, note your Server URL and Password.")
-    print()
-
-    server_url = prompt("BlueBubbles server URL (e.g. http://192.168.1.10:1234)")
-    if not server_url:
-        print_warning("Server URL is required — skipping BlueBubbles setup")
-        return
-    save_env_value("BLUEBUBBLES_SERVER_URL", server_url.rstrip("/"))
-
-    password = prompt("BlueBubbles server password", password=True)
-    if not password:
-        print_warning("Password is required — skipping BlueBubbles setup")
-        return
-    save_env_value("BLUEBUBBLES_PASSWORD", password)
-    print_success("BlueBubbles credentials saved")
-
-    print()
-    print_info("🔒 Security: Restrict who can message your bot")
-    print_info("   Use iMessage addresses: email (user@icloud.com) or phone (+15551234567)")
-    print()
-    allowed_users = prompt("Allowed iMessage addresses (comma-separated, leave empty for open access)")
-    if allowed_users:
-        save_env_value("BLUEBUBBLES_ALLOWED_USERS", allowed_users.replace(" ", ""))
-        print_success("BlueBubbles allowlist configured")
-    else:
-        print_info("⚠️  No allowlist set — anyone who can iMessage you can use the bot!")
-
-    print()
-    print_info("📬 Home Channel: phone or email for cron job delivery and notifications.")
-    print_info("   You can also set this later with /set-home in your iMessage chat.")
-    home_channel = prompt("Home channel address (leave empty to set later)")
-    if home_channel:
-        save_env_value("BLUEBUBBLES_HOME_CHANNEL", home_channel)
-
-    print()
-    print_info("Advanced settings (defaults are fine for most setups):")
-    if prompt_yes_no("Configure webhook listener settings?", False):
-        webhook_port = prompt("Webhook listener port (default: 8645)")
-        if webhook_port:
-            try:
-                save_env_value("BLUEBUBBLES_WEBHOOK_PORT", str(int(webhook_port)))
-                print_success(f"Webhook port set to {webhook_port}")
-            except ValueError:
-                print_warning("Invalid port number, using default 8645")
-
-    print()
-    print_info("Requires the BlueBubbles Private API helper for typing indicators,")
-    print_info("read receipts, and tapback reactions. Basic messaging works without it.")
-    print_info("   Install: https://docs.bluebubbles.app/helper-bundle/installation")
-
-
-def _setup_qqbot():
-    """Configure QQ Bot (Official API v2) via gateway setup."""
-    from hermes_cli.gateway import _setup_qqbot as _gateway_setup_qqbot
-    _gateway_setup_qqbot()
-
 
 def _setup_webhooks():
     """Configure webhook integration."""
@@ -2288,11 +2084,9 @@ def _setup_webhooks():
             return
 
     print()
-    print_warning("⚠  Webhook and SMS platforms require exposing gateway ports to the")
+    print_warning("⚠  Webhook integrations require exposing gateway ports to the")
     print_warning("   internet. For security, run the gateway in a sandboxed environment")
     print_warning("   (Docker, VM, etc.) to limit blast radius from prompt injection.")
-    print()
-    print_info("   Full guide: https://hermes-agent.nousresearch.com/docs/user-guide/messaging/webhooks/")
     print()
 
     port = prompt("Webhook port (default 8644)")
@@ -2318,16 +2112,157 @@ def _setup_webhooks():
     print_info("   2. Point your service (GitHub, GitLab, etc.) at:")
     print_info("      http://your-server:8644/webhooks/<route-name>")
     print()
-    print_info("   Route configuration guide:")
-    print_info("   https://hermes-agent.nousresearch.com/docs/user-guide/messaging/webhooks/#configuring-routes")
+    print_info("   Route configuration: edit the `gateway.webhooks` block in config.yaml")
     print()
     print_info("   Open config in your editor:  hermes config edit")
     print_info("   Open config in your editor:  hermes config edit")
 
 
+_RETAINED_GATEWAY_PLATFORMS = [
+    {"key": "telegram", "label": "Telegram", "emoji": "📱"},
+    {"key": "discord", "label": "Discord", "emoji": "💬"},
+    {"key": "slack", "label": "Slack", "emoji": "💼"},
+    {"key": "signal", "label": "Signal", "emoji": "📡"},
+    {"key": "email", "label": "Email", "emoji": "📧"},
+    {"key": "homeassistant", "label": "Home Assistant", "emoji": "🏠"},
+    {"key": "webhook", "label": "Webhooks", "emoji": "🔗"},
+    {"key": "api_server", "label": "API Server", "emoji": "🌐"},
+]
+
+
+def _fallback_gateway_platform_status(platform: dict) -> str:
+    key = platform["key"]
+    if key == "telegram":
+        return "configured" if get_env_value("TELEGRAM_BOT_TOKEN") else "not configured"
+    if key == "discord":
+        return "configured" if get_env_value("DISCORD_BOT_TOKEN") else "not configured"
+    if key == "slack":
+        bot = get_env_value("SLACK_BOT_TOKEN")
+        app = get_env_value("SLACK_APP_TOKEN")
+        return "configured" if bot and app else "partially configured" if bot else "not configured"
+    if key == "signal":
+        url = get_env_value("SIGNAL_HTTP_URL")
+        account = get_env_value("SIGNAL_ACCOUNT")
+        return "configured" if url and account else "partially configured" if url or account else "not configured"
+    if key == "email":
+        required = [
+            get_env_value("EMAIL_ADDRESS"),
+            get_env_value("EMAIL_PASSWORD"),
+            get_env_value("EMAIL_IMAP_HOST"),
+            get_env_value("EMAIL_SMTP_HOST"),
+        ]
+        return "configured" if all(required) else "partially configured" if any(required) else "not configured"
+    if key == "homeassistant":
+        url = get_env_value("HASS_URL")
+        token = get_env_value("HASS_TOKEN")
+        return "configured" if url and token else "partially configured" if url or token else "not configured"
+    if key == "webhook":
+        return "configured" if (get_env_value("WEBHOOK_ENABLED") or "").lower() in {"1", "true", "yes", "on"} else "not configured"
+    if key == "api_server":
+        return "configured" if (get_env_value("API_SERVER_ENABLED") or "").lower() in {"1", "true", "yes", "on"} else "not configured"
+    return "not configured"
+
+
+def _fallback_setup_signal() -> None:
+    print_header("Signal")
+    existing = get_env_value("SIGNAL_HTTP_URL")
+    if existing and not prompt_yes_no("Reconfigure Signal?", False):
+        return
+    http_url = prompt("signal-cli HTTP URL", password=False)
+    if http_url:
+        save_env_value("SIGNAL_HTTP_URL", http_url)
+    account = prompt("Signal account phone number", password=False)
+    if account:
+        save_env_value("SIGNAL_ACCOUNT", account)
+    allowed = prompt("Allowed Signal users (comma-separated, optional)", password=False)
+    save_env_value("SIGNAL_ALLOWED_USERS", allowed.replace(" ", ""))
+
+
+def _fallback_setup_email() -> None:
+    print_header("Email")
+    existing = get_env_value("EMAIL_ADDRESS")
+    if existing and not prompt_yes_no("Reconfigure Email?", False):
+        return
+    address = prompt("Email address", password=False)
+    if address:
+        save_env_value("EMAIL_ADDRESS", address)
+    password = prompt("Email password / app password", password=True)
+    if password:
+        save_env_value("EMAIL_PASSWORD", password)
+    imap_host = prompt("Email IMAP host", password=False)
+    if imap_host:
+        save_env_value("EMAIL_IMAP_HOST", imap_host)
+    smtp_host = prompt("Email SMTP host", password=False)
+    if smtp_host:
+        save_env_value("EMAIL_SMTP_HOST", smtp_host)
+    allowed = prompt("Allowed email addresses (comma-separated, optional)", password=False)
+    save_env_value("EMAIL_ALLOWED_USERS", allowed.replace(" ", ""))
+
+
+def _fallback_setup_homeassistant() -> None:
+    print_header("Home Assistant")
+    existing = get_env_value("HASS_URL")
+    if existing and not prompt_yes_no("Reconfigure Home Assistant?", False):
+        return
+    hass_url = prompt("Home Assistant URL", password=False)
+    if hass_url:
+        save_env_value("HASS_URL", hass_url)
+    token = prompt("Home Assistant token", password=True)
+    if token:
+        save_env_value("HASS_TOKEN", token)
+
+
+def _fallback_setup_api_server() -> None:
+    print_header("API Server")
+    save_env_value("API_SERVER_ENABLED", "true")
+    host = prompt("API server host (default 127.0.0.1)", password=False)
+    if host:
+        save_env_value("API_SERVER_HOST", host)
+    port = prompt("API server port (default 8642)", password=False)
+    if port:
+        save_env_value("API_SERVER_PORT", port)
+    key = prompt("API server auth key (optional on loopback)", password=True)
+    if key:
+        save_env_value("API_SERVER_KEY", key)
+
+
+def _fallback_configure_gateway_platform(platform: dict) -> None:
+    key = platform["key"]
+    if key == "telegram":
+        _setup_telegram()
+    elif key == "discord":
+        _setup_discord()
+    elif key == "slack":
+        _setup_slack()
+    elif key == "signal":
+        _fallback_setup_signal()
+    elif key == "email":
+        _fallback_setup_email()
+    elif key == "homeassistant":
+        _fallback_setup_homeassistant()
+    elif key == "webhook":
+        _setup_webhooks()
+    elif key == "api_server":
+        _fallback_setup_api_server()
+    else:
+        print_info(f"Configure {platform['label']} in config.yaml or with 'hermes gateway setup'.")
+
+
+def _gateway_setup_helpers():
+    try:
+        from hermes_cli.gateway import _all_platforms, _platform_status, _configure_platform
+        return _all_platforms, _platform_status, _configure_platform
+    except ImportError:
+        return (
+            lambda: list(_RETAINED_GATEWAY_PLATFORMS),
+            _fallback_gateway_platform_status,
+            _fallback_configure_gateway_platform,
+        )
+
+
 def setup_gateway(config: dict):
     """Configure messaging platform integrations."""
-    from hermes_cli.gateway import _all_platforms, _platform_status, _configure_platform
+    _all_platforms, _platform_status, _configure_platform = _gateway_setup_helpers()
 
     print_header("Messaging Platforms")
     print_info("Connect to messaging platforms to chat with Hermes from anywhere.")
@@ -2356,8 +2291,8 @@ def setup_gateway(config: dict):
 
     # ── Gateway Service Setup ──
     # Count any platform (built-in or plugin) the user configured during this
-    # setup pass — reuses ``_platform_status`` so plugin platforms like IRC
-    # are picked up without another hard-coded env-var list.
+    # setup pass — reuses ``_platform_status`` so plugin platforms are picked
+    # up without another hard-coded env-var list.
     def _is_progress(status: str) -> bool:
         s = status.lower()
         return not (
@@ -2386,12 +2321,6 @@ def setup_gateway(config: dict):
             missing_home.append("Discord")
         if get_env_value("SLACK_BOT_TOKEN") and not get_env_value("SLACK_HOME_CHANNEL"):
             missing_home.append("Slack")
-        if get_env_value("BLUEBUBBLES_SERVER_URL") and not get_env_value("BLUEBUBBLES_HOME_CHANNEL"):
-            missing_home.append("BlueBubbles")
-        if get_env_value("QQ_APP_ID") and not (
-            get_env_value("QQBOT_HOME_CHANNEL") or get_env_value("QQ_HOME_CHANNEL")
-        ):
-            missing_home.append("QQBot")
 
         if missing_home:
             print()
@@ -2637,11 +2566,10 @@ def _get_section_config_summary(config: dict, section_key: str) -> Optional[str]
         return f"max turns: {max_turns}"
 
     elif section_key == "gateway":
-        from hermes_cli.gateway import _all_platforms, _platform_status
+        _all_platforms, _platform_status, _ = _gateway_setup_helpers()
         # Count any non-empty status other than the "not configured" sentinel —
-        # platforms like WhatsApp ("enabled, not paired"), Matrix ("configured
-        # + E2EE"), and Signal ("partially configured") all indicate the user
-        # has already started setup and we shouldn't force the section to rerun.
+        # statuses like "partially configured" still indicate the user has
+        # already started setup and we shouldn't force the section to rerun.
         configured = [
             _gateway_platform_short_label(plat["label"])
             for plat in _all_platforms()
@@ -2731,7 +2659,6 @@ _HIGH_IMPACT_KIND_KEYWORDS = {
     "telegram": "⚠ Telegram — this will point Hermes at your OpenClaw Telegram bot",
     "slack": "⚠ Slack — this will point Hermes at your OpenClaw Slack workspace",
     "discord": "⚠ Discord — this will point Hermes at your OpenClaw Discord bot",
-    "whatsapp": "⚠ WhatsApp — this will point Hermes at your OpenClaw WhatsApp connection",
     "config": "⚠ Config values — OpenClaw settings may not map 1:1 to Hermes equivalents",
     "soul": "⚠ Instruction file — may contain OpenClaw-specific setup/restart procedures",
     "memory": "⚠ Memory/context file — may reference OpenClaw-specific infrastructure",

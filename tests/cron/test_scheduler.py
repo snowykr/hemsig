@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, patch, MagicMock
 
 import pytest
 
-from cron.scheduler import _resolve_origin, _resolve_delivery_target, _deliver_result, _send_media_via_adapter, run_job, SILENT_MARKER, _build_job_prompt
+from cron.scheduler import _resolve_origin, _resolve_delivery_target, _deliver_result, _send_media_via_adapter, run_job, SILENT_MARKER, _build_job_prompt, _validate_cron_delivery_value
 from tools.env_passthrough import clear_env_passthrough
 from tools.credential_files import clear_credential_files
 
@@ -67,37 +67,19 @@ class TestResolveDeliveryTarget:
     @pytest.mark.parametrize(
         ("platform", "env_var", "chat_id"),
         [
-            ("matrix", "MATRIX_HOME_ROOM", "!bot-room:example.org"),
             ("signal", "SIGNAL_HOME_CHANNEL", "+15551234567"),
-            ("mattermost", "MATTERMOST_HOME_CHANNEL", "team-town-square"),
-            ("sms", "SMS_HOME_CHANNEL", "+15557654321"),
             ("email", "EMAIL_HOME_ADDRESS", "home@example.com"),
-            ("dingtalk", "DINGTALK_HOME_CHANNEL", "cidNNN"),
-            ("feishu", "FEISHU_HOME_CHANNEL", "oc_home"),
-            ("wecom", "WECOM_HOME_CHANNEL", "wecom-home"),
-            ("weixin", "WEIXIN_HOME_CHANNEL", "wxid_home"),
-            ("qqbot", "QQ_HOME_CHANNEL", "group-openid-home"),
         ],
     )
     def test_origin_delivery_without_origin_falls_back_to_supported_home_channels(
         self, monkeypatch, platform, env_var, chat_id
     ):
         for fallback_env in (
-            "MATRIX_HOME_ROOM",
-            "MATRIX_HOME_CHANNEL",
             "TELEGRAM_HOME_CHANNEL",
             "DISCORD_HOME_CHANNEL",
             "SLACK_HOME_CHANNEL",
             "SIGNAL_HOME_CHANNEL",
-            "MATTERMOST_HOME_CHANNEL",
-            "SMS_HOME_CHANNEL",
             "EMAIL_HOME_ADDRESS",
-            "DINGTALK_HOME_CHANNEL",
-            "BLUEBUBBLES_HOME_CHANNEL",
-            "FEISHU_HOME_CHANNEL",
-            "WECOM_HOME_CHANNEL",
-            "WEIXIN_HOME_CHANNEL",
-            "QQ_HOME_CHANNEL",
         ):
             monkeypatch.delenv(fallback_env, raising=False)
         monkeypatch.setenv(env_var, chat_id)
@@ -108,15 +90,45 @@ class TestResolveDeliveryTarget:
             "thread_id": None,
         }
 
-    def test_bare_matrix_delivery_uses_matrix_home_room(self, monkeypatch):
-        monkeypatch.delenv("MATRIX_HOME_CHANNEL", raising=False)
-        monkeypatch.setenv("MATRIX_HOME_ROOM", "!room123:example.org")
+    @pytest.mark.parametrize("platform_name", ["webhook", "api_server"])
+    def test_rejects_unsupported_cron_delivery_platforms(self, platform_name):
+        assert _validate_cron_delivery_value(platform_name) == (
+            f"platform {platform_name} is not supported for cron delivery"
+        )
 
-        assert _resolve_delivery_target({"deliver": "matrix"}) == {
-            "platform": "matrix",
-            "chat_id": "!room123:example.org",
-            "thread_id": None,
-        }
+    @pytest.mark.parametrize("origin_platform", ["webhook", "api_server"])
+    def test_origin_delivery_rejects_unsupported_origin_platforms(self, origin_platform):
+        assert _validate_cron_delivery_value(
+            "origin",
+            origin={"platform": origin_platform, "chat_id": "target"},
+        ) == f"origin platform {origin_platform} is not supported for cron delivery"
+
+    @pytest.mark.parametrize("deliver", ["oldchat", "oldchat:room-1"])
+    def test_rejects_unknown_cron_delivery_platforms(self, deliver):
+        assert _validate_cron_delivery_value(deliver) == "unknown platform 'oldchat'"
+
+    def test_origin_delivery_rejects_unknown_origin_platform(self):
+        assert _validate_cron_delivery_value(
+            "origin",
+            origin={"platform": "legacychat", "chat_id": "target"},
+        ) == "origin unknown platform 'legacychat'"
+
+    def test_accepts_registered_plugin_delivery_platform(self):
+        from gateway.platform_registry import PlatformEntry, platform_registry
+
+        entry = PlatformEntry(
+            name="cronchat",
+            label="Cron Chat",
+            adapter_factory=lambda cfg: MagicMock(),
+            check_fn=lambda: True,
+            source="plugin",
+        )
+        platform_registry.register(entry)
+        try:
+            assert _validate_cron_delivery_value("cronchat:room-1") is None
+        finally:
+            platform_registry.unregister("cronchat")
+
 
     def test_explicit_telegram_topic_target_with_thread_id(self):
         """deliver: 'telegram:chat_id:thread_id' parses correctly."""
@@ -156,20 +168,6 @@ class TestResolveDeliveryTarget:
             "thread_id": None,
         }
 
-    def test_human_friendly_label_resolved_via_channel_directory(self):
-        """deliver: 'whatsapp:Alice (dm)' resolves to the real JID."""
-        job = {"deliver": "whatsapp:Alice (dm)"}
-        with patch(
-            "gateway.channel_directory.resolve_channel_name",
-            return_value="12345678901234@lid",
-        ) as resolve_mock:
-            result = _resolve_delivery_target(job)
-        resolve_mock.assert_called_once_with("whatsapp", "Alice (dm)")
-        assert result == {
-            "platform": "whatsapp",
-            "chat_id": "12345678901234@lid",
-            "thread_id": None,
-        }
 
     def test_human_friendly_label_without_suffix_resolved(self):
         """deliver: 'telegram:My Group' resolves without display suffix."""
@@ -199,19 +197,6 @@ class TestResolveDeliveryTarget:
             "thread_id": "17585",
         }
 
-    def test_raw_id_not_mangled_when_directory_returns_none(self):
-        """deliver: 'whatsapp:12345@lid' passes through when directory has no match."""
-        job = {"deliver": "whatsapp:12345@lid"}
-        with patch(
-            "gateway.channel_directory.resolve_channel_name",
-            return_value=None,
-        ):
-            result = _resolve_delivery_target(job)
-        assert result == {
-            "platform": "whatsapp",
-            "chat_id": "12345@lid",
-            "thread_id": None,
-        }
 
     def test_bare_platform_uses_matching_origin_chat(self):
         job = {
@@ -681,6 +666,82 @@ class TestDeliverResultErrorReturns:
         result = _deliver_result(job, "Output.")
         assert result is not None
         assert "no delivery target" in result
+
+    @pytest.mark.parametrize("deliver", ["oldchat:room-1", "legacyphone:+15551234567"])
+    def test_returns_error_for_unknown_delivery_platforms(self, deliver):
+        result = _deliver_result({"id": "legacy-target", "deliver": deliver}, "Output.")
+        assert result is not None
+        assert "unknown platform" in result
+
+    @pytest.mark.parametrize(
+        ("platform", "deliver"),
+        [
+            ("webhook", "webhook:route-1"),
+            ("api_server", "api_server:session-1"),
+        ],
+    )
+    def test_returns_error_for_unsupported_send_message_outbound_platforms(self, platform, deliver):
+        from gateway.config import Platform
+
+        pconfig = MagicMock()
+        pconfig.enabled = True
+        mock_cfg = MagicMock()
+        mock_cfg.platforms = {Platform(platform): pconfig}
+
+        with patch("gateway.config.load_gateway_config", return_value=mock_cfg), \
+             patch("cron.scheduler.load_config", return_value={"cron": {"wrap_response": False}}):
+            result = _deliver_result({"id": f"{platform}-job", "deliver": deliver}, "Output.")
+
+        assert result == f"platform {platform} is not supported for cron delivery"
+
+    def test_registered_plugin_delivery_uses_standalone_fallback_when_no_live_adapter(self):
+        from gateway.config import Platform
+        from gateway.platforms.base import SendResult
+        from gateway.platform_registry import PlatformEntry, platform_registry
+
+        class _PluginAdapter:
+            def __init__(self, _pconfig):
+                self.calls = calls
+
+            async def connect(self):
+                self.calls.append("connect")
+                return True
+
+            async def send(self, *, chat_id: str, content: str, metadata=None):
+                self.calls.append(f"send:{chat_id}:{content}:{metadata}")
+                return SendResult(success=True, message_id="cron-msg")
+
+            async def disconnect(self):
+                self.calls.append("disconnect")
+
+        calls = []
+        entry = PlatformEntry(
+            name="cronchat",
+            label="Cron Chat",
+            adapter_factory=lambda _pconfig: _PluginAdapter(_pconfig),
+            check_fn=lambda: True,
+            source="plugin",
+        )
+        platform_registry.register(entry)
+        try:
+            plugin_platform = Platform("cronchat")
+            pconfig = MagicMock()
+            pconfig.enabled = True
+            mock_cfg = MagicMock()
+            mock_cfg.platforms = {plugin_platform: pconfig}
+
+            with patch("gateway.config.load_gateway_config", return_value=mock_cfg), \
+                 patch("cron.scheduler.load_config", return_value={"cron": {"wrap_response": False}}):
+                result = _deliver_result({"id": "cron-plugin", "deliver": "cronchat:room-1"}, "Output.")
+        finally:
+            platform_registry.unregister("cronchat")
+
+        assert result is None
+        assert calls == [
+            "connect",
+            "send:room-1:Output.:None",
+            "disconnect",
+        ]
 
 
 class TestRunJobSessionPersistence:
@@ -1214,6 +1275,69 @@ class TestRunJobSessionPersistence:
         assert os.getenv("HERMES_CRON_AUTO_DELIVER_CHAT_ID") is None
         assert os.getenv("HERMES_CRON_AUTO_DELIVER_THREAD_ID") is None
         assert fake_db.close.call_count == 2
+
+    def test_run_job_sets_all_auto_delivery_targets_for_multi_target_deliver(self, tmp_path, monkeypatch):
+        job = {
+            "id": "test-job",
+            "name": "test",
+            "prompt": "hello",
+            "deliver": "telegram,discord:222",
+        }
+        fake_db = MagicMock()
+        seen = {}
+
+        (tmp_path / ".env").write_text("TELEGRAM_HOME_CHANNEL=-2002\n")
+        monkeypatch.delenv("TELEGRAM_HOME_CHANNEL", raising=False)
+        monkeypatch.delenv("HERMES_CRON_AUTO_DELIVER_PLATFORM", raising=False)
+        monkeypatch.delenv("HERMES_CRON_AUTO_DELIVER_CHAT_ID", raising=False)
+        monkeypatch.delenv("HERMES_CRON_AUTO_DELIVER_THREAD_ID", raising=False)
+        monkeypatch.delenv("HERMES_CRON_AUTO_DELIVER_TARGETS", raising=False)
+
+        class FakeAgent:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def run_conversation(self, *args, **kwargs):
+                from gateway.session_context import get_session_env
+
+                seen["platform"] = get_session_env("HERMES_CRON_AUTO_DELIVER_PLATFORM") or None
+                seen["chat_id"] = get_session_env("HERMES_CRON_AUTO_DELIVER_CHAT_ID") or None
+                seen["thread_id"] = get_session_env("HERMES_CRON_AUTO_DELIVER_THREAD_ID") or None
+                seen["targets"] = json.loads(get_session_env("HERMES_CRON_AUTO_DELIVER_TARGETS") or "[]")
+                return {"final_response": "ok"}
+
+        with patch("cron.scheduler._hermes_home", tmp_path), \
+             patch("hermes_state.SessionDB", return_value=fake_db), \
+             patch(
+                 "hermes_cli.runtime_provider.resolve_runtime_provider",
+                 return_value={
+                     "api_key": "***",
+                     "base_url": "https://example.invalid/v1",
+                     "provider": "openrouter",
+                     "api_mode": "chat_completions",
+                 },
+             ), \
+             patch("run_agent.AIAgent", FakeAgent):
+            success, output, final_response, error = run_job(job)
+
+        assert success is True
+        assert error is None
+        assert final_response == "ok"
+        assert "ok" in output
+        assert seen == {
+            "platform": "telegram",
+            "chat_id": "-2002",
+            "thread_id": None,
+            "targets": [
+                {"platform": "telegram", "chat_id": "-2002", "thread_id": None},
+                {"platform": "discord", "chat_id": "222", "thread_id": None},
+            ],
+        }
+        assert os.getenv("HERMES_CRON_AUTO_DELIVER_PLATFORM") is None
+        assert os.getenv("HERMES_CRON_AUTO_DELIVER_CHAT_ID") is None
+        assert os.getenv("HERMES_CRON_AUTO_DELIVER_THREAD_ID") is None
+        assert os.getenv("HERMES_CRON_AUTO_DELIVER_TARGETS") is None
+        fake_db.close.assert_called_once()
 
 
 class TestRunJobConfigLogging:

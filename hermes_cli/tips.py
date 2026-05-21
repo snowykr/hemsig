@@ -179,7 +179,7 @@ TIPS = [
 
     # --- Cron & Scheduling ---
     "Cron jobs can attach skills: hermes cron add --skill blogwatcher \"Check for new posts\".",
-    "Cron delivery targets include telegram, discord, slack, email, sms, and 12+ more platforms.",
+    "Cron delivery targets include telegram, discord, slack, signal, email, and homeassistant.",
     "If a cron response starts with [SILENT], delivery is suppressed — useful for monitoring-only jobs.",
     "Cron supports relative delays (30m), intervals (every 2h), cron expressions, and ISO timestamps.",
     "Cron jobs run in completely fresh agent sessions — prompts must be self-contained.",
@@ -189,13 +189,11 @@ TIPS = [
     "Five TTS providers available: Edge TTS (free), ElevenLabs, OpenAI, NeuTTS (free local), MiniMax.",
     "/voice on enables voice mode in the CLI. Ctrl+B toggles push-to-talk recording.",
     "Streaming TTS plays sentences as they generate — you don't wait for the full response.",
-    "Voice messages on Telegram, Discord, WhatsApp, and Slack are auto-transcribed.",
+    "Voice messages on Telegram, Discord, Slack, and Signal are auto-transcribed.",
 
     # --- Gateway & Messaging ---
-    "Hermes runs on 18 platforms: Telegram, Discord, Slack, WhatsApp, Signal, Matrix, email, and more.",
+    "Hermes runs on Telegram, Discord, Slack, Signal, Email, Home Assistant, Webhooks, and an API server.",
     "hermes gateway install sets it up as a system service that starts on boot.",
-    "DingTalk uses Stream Mode — no webhooks or public URL needed.",
-    "BlueBubbles brings iMessage to Hermes via a local macOS server.",
     "Webhook routes support HMAC validation, rate limiting, and event filtering.",
     "The API server exposes an OpenAI-compatible endpoint compatible with Open WebUI and LibreChat.",
     "Discord voice channel mode: the bot joins VC, transcribes speech, and talks back.",
@@ -345,5 +343,3 @@ def get_random_tip(exclude_recent: int = 0) -> str:
             deduplication across sessions.
     """
     return random.choice(TIPS)
-
-

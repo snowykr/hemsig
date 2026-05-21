@@ -37,8 +37,10 @@ class TestParseTargetPlatformChat:
         assert target.is_origin is True
 
     def test_unknown_platform(self):
-        target = DeliveryTarget.parse("unknown_platform")
-        assert target.platform == Platform.LOCAL
+        import pytest
+
+        with pytest.raises(ValueError):
+            DeliveryTarget.parse("unknown_platform")
 
 
 class TestTargetToStringRoundtrip:
@@ -82,21 +84,12 @@ class TestCaseSensitiveChatIdParsing:
         assert target.chat_id == "C123ABC"
         assert target.thread_id == "thread123"
     
-    def test_matrix_room_id_preserved(self):
-        """Matrix room IDs like !RoomABC:example.org should preserve case.
-        
-        Note: Matrix room IDs contain colons (e.g., !RoomABC:example.org).
-        Due to the platform:chat_id:thread_id format, these are parsed as
-        chat_id=!RoomABC and thread_id=example.org. This is a known limitation
-        of the current format. The fix preserves case but doesn't change the
-        parsing structure.
-        """
-        target = DeliveryTarget.parse("matrix:!RoomABC:example.org")
-        assert target.platform == Platform.MATRIX
-        # The room ID is split at the first colon after the platform prefix
-        # This is a format limitation - the case is preserved but the structure is split
-        assert target.chat_id == "!RoomABC"
-        assert target.thread_id == "example.org"
+    def test_signal_target_preserved(self):
+        """Signal chat identifiers should preserve their exact formatting."""
+        target = DeliveryTarget.parse("signal:+15551234567")
+        assert target.platform == Platform.SIGNAL
+        assert target.chat_id == "+15551234567"
+        assert target.thread_id is None
     
     def test_mixed_case_chat_id_roundtrip(self):
         """Mixed-case chat IDs should survive parse-to_string roundtrip."""
@@ -121,6 +114,4 @@ class TestPlatformNameCaseInsensitivity:
         target = DeliveryTarget.parse("TeleGram:12345")
         assert target.platform == Platform.TELEGRAM
         assert target.chat_id == "12345"
-
-
 

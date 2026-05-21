@@ -20,22 +20,55 @@ class TestPlatformEnumDynamic:
         assert Platform("telegram") is Platform.TELEGRAM
 
     def test_dynamic_member_created(self):
-        p = Platform("irc")
-        assert p.value == "irc"
-        assert p.name == "IRC"
+        entry = PlatformEntry(
+            name="customchat",
+            label="Custom Chat",
+            adapter_factory=lambda cfg: MagicMock(),
+            check_fn=lambda: True,
+            source="plugin",
+        )
+        platform_registry.register(entry)
+        try:
+            p = Platform("customchat")
+            assert p.value == "customchat"
+            assert p.name == "CUSTOMCHAT"
+        finally:
+            platform_registry.unregister("customchat")
 
     def test_dynamic_member_identity_stable(self):
         """Same value returns same object (cached)."""
-        a = Platform("irc")
-        b = Platform("irc")
-        assert a is b
+        entry = PlatformEntry(
+            name="stablechat",
+            label="Stable Chat",
+            adapter_factory=lambda cfg: MagicMock(),
+            check_fn=lambda: True,
+            source="plugin",
+        )
+        platform_registry.register(entry)
+        try:
+            a = Platform("stablechat")
+            b = Platform("stablechat")
+            assert a is b
+        finally:
+            platform_registry.unregister("stablechat")
 
     def test_dynamic_member_case_normalised(self):
         """Mixed case normalised to lowercase."""
-        a = Platform("IRC")
-        b = Platform("irc")
-        assert a is b
-        assert a.value == "irc"
+        entry = PlatformEntry(
+            name="casechat",
+            label="Case Chat",
+            adapter_factory=lambda cfg: MagicMock(),
+            check_fn=lambda: True,
+            source="plugin",
+        )
+        platform_registry.register(entry)
+        try:
+            a = Platform("CASECHAT")
+            b = Platform("casechat")
+            assert a is b
+            assert a.value == "casechat"
+        finally:
+            platform_registry.unregister("casechat")
 
     def test_dynamic_member_with_hyphens(self):
         """Registered plugin platforms with hyphens work once registered."""
@@ -55,6 +88,11 @@ class TestPlatformEnumDynamic:
             assert p.name == "MY_PLATFORM"
         finally:
             _reg.unregister("my-platform")
+
+    def test_dynamic_member_rejects_unknown_platform(self):
+        """Unknown platforms must stay invalid at runtime."""
+        with pytest.raises(ValueError):
+            Platform("legacychat")
 
     def test_dynamic_member_rejects_unregistered(self):
         """Arbitrary strings are rejected to prevent enum pollution."""
@@ -199,7 +237,9 @@ class TestPlatformRegistry:
         )
         reg.register(entry1)
         reg.register(entry2)
-        assert reg.get("dup").label == "Dup v2"
+        replaced = reg.get("dup")
+        assert replaced is not None
+        assert replaced.label == "Dup v2"
 
 
 # ── GatewayConfig integration ────────────────────────────────────────────
@@ -209,16 +249,27 @@ class TestGatewayConfigPluginPlatform:
     """Test that GatewayConfig parses and validates plugin platforms."""
 
     def test_from_dict_accepts_plugin_platform(self):
-        data = {
-            "platforms": {
-                "telegram": {"enabled": True, "token": "test-token"},
-                "irc": {"enabled": True, "extra": {"server": "irc.libera.chat"}},
+        entry = PlatformEntry(
+            name="configchat",
+            label="Config Chat",
+            adapter_factory=lambda cfg: MagicMock(),
+            check_fn=lambda: True,
+            source="plugin",
+        )
+        platform_registry.register(entry)
+        try:
+            data = {
+                "platforms": {
+                    "telegram": {"enabled": True, "token": "test-token"},
+                    "configchat": {"enabled": True, "extra": {"server": "chat.example.org"}},
+                }
             }
-        }
-        cfg = GatewayConfig.from_dict(data)
-        platform_values = {p.value for p in cfg.platforms}
-        assert "telegram" in platform_values
-        assert "irc" in platform_values
+            cfg = GatewayConfig.from_dict(data)
+            platform_values = {p.value for p in cfg.platforms}
+            assert "telegram" in platform_values
+            assert "configchat" in platform_values
+        finally:
+            platform_registry.unregister("configchat")
 
     def test_get_connected_platforms_includes_registered_plugin(self):
         """Plugin platform with registry entry passes get_connected_platforms."""
@@ -285,6 +336,32 @@ class TestGatewayConfigPluginPlatform:
         finally:
             _reg.unregister("badconfig")
 
+    def test_get_connected_platforms_uses_plugin_validate_config_before_generic_token(self):
+        """Plugin-specific readiness must override the generic token shortcut."""
+        from gateway.platform_registry import platform_registry as _reg
+
+        test_entry = PlatformEntry(
+            name="strictplug",
+            label="StrictPlug",
+            adapter_factory=lambda cfg: MagicMock(),
+            check_fn=lambda: True,
+            validate_config=lambda cfg: bool(cfg.extra.get("server")),
+            source="plugin",
+        )
+        _reg.register(test_entry)
+        try:
+            data = {
+                "platforms": {
+                    "strictplug": {"enabled": True, "token": "abc", "extra": {}},
+                }
+            }
+            cfg = GatewayConfig.from_dict(data)
+            connected = cfg.get_connected_platforms()
+            connected_values = {p.value for p in connected}
+            assert "strictplug" not in connected_values
+        finally:
+            _reg.unregister("strictplug")
+
 
 # ── Extended PlatformEntry fields ─────────────────────────────────────
 
@@ -308,18 +385,18 @@ class TestPlatformEntryExtendedFields:
 
     def test_custom_auth_fields(self):
         entry = PlatformEntry(
-            name="irc",
-            label="IRC",
+            name="customchat",
+            label="Custom Chat",
             adapter_factory=lambda cfg: None,
             check_fn=lambda: True,
-            allowed_users_env="IRC_ALLOWED_USERS",
-            allow_all_env="IRC_ALLOW_ALL_USERS",
+            allowed_users_env="CUSTOMCHAT_ALLOWED_USERS",
+            allow_all_env="CUSTOMCHAT_ALLOW_ALL_USERS",
             max_message_length=450,
             pii_safe=False,
             emoji="💬",
         )
-        assert entry.allowed_users_env == "IRC_ALLOWED_USERS"
-        assert entry.allow_all_env == "IRC_ALLOW_ALL_USERS"
+        assert entry.allowed_users_env == "CUSTOMCHAT_ALLOWED_USERS"
+        assert entry.allow_all_env == "CUSTOMCHAT_ALLOW_ALL_USERS"
         assert entry.max_message_length == 450
         assert entry.emoji == "💬"
 
@@ -337,8 +414,19 @@ class TestCronPlatformResolution:
 
     def test_plugin_platform_resolves(self):
         """Plugin platform names create dynamic enum members."""
-        p = Platform("irc")
-        assert p.value == "irc"
+        entry = PlatformEntry(
+            name="cronchat",
+            label="Cron Chat",
+            adapter_factory=lambda cfg: MagicMock(),
+            check_fn=lambda: True,
+            source="plugin",
+        )
+        platform_registry.register(entry)
+        try:
+            p = Platform("cronchat")
+            assert p.value == "cronchat"
+        finally:
+            platform_registry.unregister("cronchat")
 
     def test_invalid_platform_type_rejected(self):
         """Non-string values are still rejected."""

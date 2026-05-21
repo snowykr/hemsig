@@ -167,6 +167,18 @@ def _create_test_db(db_path, session_id, messages):
     conn.close()
 
 
+def _plugin_platform_entry(name: str):
+    from gateway.platform_registry import PlatformEntry
+
+    return PlatformEntry(
+        name=name,
+        label=f"{name.title()} Chat",
+        adapter_factory=lambda cfg: MagicMock(),
+        check_fn=lambda: True,
+        source="plugin",
+    )
+
+
 @pytest.fixture
 def mock_session_db(tmp_path, populated_sessions_dir):
     """Create a real SQLite DB with test messages and wire it up."""
@@ -513,6 +525,65 @@ class TestE2EConversationsList:
         result = _run_tool(server, "conversations_list", {"limit": 2})
         assert result["count"] == 2
 
+    def test_list_skips_unknown_platform_entries(self, sessions_dir, mock_session_db, monkeypatch):
+        entries = {
+            "agent:main:legacychat:dm:123": {
+                "session_key": "agent:main:legacychat:dm:123",
+                "session_id": "legacy-session",
+                "platform": "legacychat",
+                "chat_type": "dm",
+                "display_name": "Legacy",
+                "created_at": "2026-03-29T12:00:00",
+                "updated_at": "2026-03-29T14:30:00",
+                "origin": {"platform": "legacychat", "chat_id": "123", "chat_type": "dm"},
+            }
+        }
+        (sessions_dir / "sessions.json").write_text(json.dumps(entries))
+        monkeypatch.setenv("HERMES_HOME", str(sessions_dir.parent))
+
+        import mcp_serve
+        server = mcp_serve.create_mcp_server(event_bridge=mcp_serve.EventBridge())
+        result = _run_tool(server, "conversations_list")
+        assert result["count"] == 0
+
+    def test_list_includes_registered_plugin_platform_after_lazy_discovery(self, sessions_dir, monkeypatch):
+        platform_name = "mcpchat"
+        entries = {
+            f"agent:main:{platform_name}:dm:123": {
+                "session_key": f"agent:main:{platform_name}:dm:123",
+                "session_id": "plugin-session",
+                "platform": platform_name,
+                "chat_type": "dm",
+                "display_name": "Plugin User",
+                "created_at": "2026-03-29T12:00:00",
+                "updated_at": "2026-03-29T14:30:00",
+                "origin": {"platform": platform_name, "chat_id": "123", "chat_type": "dm"},
+            }
+        }
+        (sessions_dir / "sessions.json").write_text(json.dumps(entries))
+        monkeypatch.setenv("HERMES_HOME", str(sessions_dir.parent))
+
+        import mcp_serve
+        from gateway.platform_registry import platform_registry
+
+        entry = _plugin_platform_entry(platform_name)
+
+        def fake_discover_plugins(force: bool = False):
+            del force
+            platform_registry.register(entry)
+
+        monkeypatch.setattr("hermes_cli.plugins.discover_plugins", fake_discover_plugins)
+        monkeypatch.setattr(mcp_serve, "_plugin_discovery_done", False)
+
+        try:
+            server = mcp_serve.create_mcp_server(event_bridge=mcp_serve.EventBridge())
+            result = _run_tool(server, "conversations_list")
+        finally:
+            platform_registry.unregister(platform_name)
+
+        assert result["count"] == 1
+        assert result["conversations"][0]["platform"] == platform_name
+
 
 class TestE2EConversationGet:
     def test_get_existing(self, mcp_server_e2e, _event_loop):
@@ -529,6 +600,66 @@ class TestE2EConversationGet:
         result = _run_tool(server, "conversation_get",
                           {"session_key": "nonexistent:key"})
         assert "error" in result
+
+    def test_get_unknown_platform_session_returns_not_found(self, sessions_dir, mock_session_db, monkeypatch):
+        entries = {
+            "agent:main:legacychat:dm:123": {
+                "session_key": "agent:main:legacychat:dm:123",
+                "session_id": "legacy-session",
+                "platform": "legacychat",
+                "chat_type": "dm",
+                "display_name": "Legacy",
+                "created_at": "2026-03-29T12:00:00",
+                "updated_at": "2026-03-29T14:30:00",
+                "origin": {"platform": "legacychat", "chat_id": "123", "chat_type": "dm"},
+            }
+        }
+        (sessions_dir / "sessions.json").write_text(json.dumps(entries))
+        monkeypatch.setenv("HERMES_HOME", str(sessions_dir.parent))
+
+        import mcp_serve
+        server = mcp_serve.create_mcp_server(event_bridge=mcp_serve.EventBridge())
+        result = _run_tool(server, "conversation_get", {"session_key": "agent:main:legacychat:dm:123"})
+        assert "error" in result
+
+    def test_get_registered_plugin_platform_session_after_lazy_discovery(self, sessions_dir, monkeypatch):
+        platform_name = "mcpdetailchat"
+        session_key = f"agent:main:{platform_name}:dm:123"
+        entries = {
+            session_key: {
+                "session_key": session_key,
+                "session_id": "plugin-session",
+                "platform": platform_name,
+                "chat_type": "dm",
+                "display_name": "Plugin User",
+                "created_at": "2026-03-29T12:00:00",
+                "updated_at": "2026-03-29T14:30:00",
+                "origin": {"platform": platform_name, "chat_id": "123", "chat_type": "dm"},
+            }
+        }
+        (sessions_dir / "sessions.json").write_text(json.dumps(entries))
+        monkeypatch.setenv("HERMES_HOME", str(sessions_dir.parent))
+
+        import mcp_serve
+        from gateway.platform_registry import platform_registry
+
+        entry = _plugin_platform_entry(platform_name)
+
+        def fake_discover_plugins(force: bool = False):
+            del force
+            platform_registry.register(entry)
+
+        monkeypatch.setattr("hermes_cli.plugins.discover_plugins", fake_discover_plugins)
+        monkeypatch.setattr(mcp_serve, "_plugin_discovery_done", False)
+
+        try:
+            server = mcp_serve.create_mcp_server(event_bridge=mcp_serve.EventBridge())
+            result = _run_tool(server, "conversation_get", {"session_key": session_key})
+        finally:
+            platform_registry.unregister(platform_name)
+
+        assert result["platform"] == platform_name
+        assert result["display_name"] == "Plugin User"
 
 
 class TestE2EMessagesRead:
@@ -572,6 +703,27 @@ class TestE2EMessagesRead:
                           {"session_key": "nonexistent:key"})
         assert "error" in result
 
+    def test_read_unknown_platform_session_returns_not_found(self, sessions_dir, mock_session_db, monkeypatch):
+        entries = {
+            "agent:main:legacychat:dm:123": {
+                "session_key": "agent:main:legacychat:dm:123",
+                "session_id": "legacy-session",
+                "platform": "legacychat",
+                "chat_type": "dm",
+                "display_name": "Legacy",
+                "created_at": "2026-03-29T12:00:00",
+                "updated_at": "2026-03-29T14:30:00",
+                "origin": {"platform": "legacychat", "chat_id": "123", "chat_type": "dm"},
+            }
+        }
+        (sessions_dir / "sessions.json").write_text(json.dumps(entries))
+        monkeypatch.setenv("HERMES_HOME", str(sessions_dir.parent))
+
+        import mcp_serve
+        server = mcp_serve.create_mcp_server(event_bridge=mcp_serve.EventBridge())
+        result = _run_tool(server, "messages_read", {"session_key": "agent:main:legacychat:dm:123"})
+        assert "error" in result
+
 
 class TestE2EAttachmentsFetch:
     def test_fetch_media_from_message(self, mcp_server_e2e, _event_loop):
@@ -609,6 +761,27 @@ class TestE2EAttachmentsFetch:
             "session_key": "nonexistent:key",
             "message_id": "1",
         })
+        assert "error" in result
+
+    def test_fetch_unknown_platform_session_returns_not_found(self, sessions_dir, mock_session_db, monkeypatch):
+        entries = {
+            "agent:main:legacychat:dm:123": {
+                "session_key": "agent:main:legacychat:dm:123",
+                "session_id": "legacy-session",
+                "platform": "legacychat",
+                "chat_type": "dm",
+                "display_name": "Legacy",
+                "created_at": "2026-03-29T12:00:00",
+                "updated_at": "2026-03-29T14:30:00",
+                "origin": {"platform": "legacychat", "chat_id": "123", "chat_type": "dm"},
+            }
+        }
+        (sessions_dir / "sessions.json").write_text(json.dumps(entries))
+        monkeypatch.setenv("HERMES_HOME", str(sessions_dir.parent))
+
+        import mcp_serve
+        server = mcp_serve.create_mcp_server(event_bridge=mcp_serve.EventBridge())
+        result = _run_tool(server, "attachments_fetch", {"session_key": "agent:main:legacychat:dm:123", "message_id": "1"})
         assert "error" in result
 
 
@@ -661,6 +834,32 @@ class TestE2EEventsPoll:
         result = _run_tool(server, "events_poll",
                           {"session_key": "b"})
         assert len(result["events"]) == 1
+
+    def test_poll_skips_unknown_platform_sessions(self, sessions_dir, monkeypatch):
+        entries = {
+            "agent:main:legacychat:dm:123": {
+                "session_key": "agent:main:legacychat:dm:123",
+                "session_id": "legacy-session",
+                "platform": "legacychat",
+                "chat_type": "dm",
+                "updated_at": "2026-03-29T14:30:00",
+                "origin": {"platform": "legacychat", "chat_id": "123", "chat_type": "dm"},
+            }
+        }
+        (sessions_dir / "sessions.json").write_text(json.dumps(entries))
+        monkeypatch.setenv("HERMES_HOME", str(sessions_dir.parent))
+
+        import mcp_serve
+
+        class EmptyDB:
+            def get_messages(self, _session_id):
+                return [{"role": "user", "content": "legacy", "timestamp": "1", "id": 1}]
+
+        bridge = mcp_serve.EventBridge()
+        monkeypatch.setattr(mcp_serve, "_get_sessions_dir", lambda: sessions_dir)
+        bridge._poll_once(EmptyDB())
+        result = _run_tool(mcp_serve.create_mcp_server(event_bridge=bridge), "events_poll")
+        assert result["events"] == []
 
 
 class TestE2EEventsWait:
@@ -726,6 +925,26 @@ class TestE2EChannelsList:
         assert result["count"] == 1
         assert result["channels"][0]["target"] == "slack:C1234"
 
+    def test_channels_skip_unknown_platform_sessions(self, sessions_dir, mock_session_db, monkeypatch):
+        entries = {
+            "agent:main:legacychat:dm:123": {
+                "session_key": "agent:main:legacychat:dm:123",
+                "session_id": "legacy-session",
+                "platform": "legacychat",
+                "chat_type": "dm",
+                "display_name": "Legacy",
+                "updated_at": "2026-03-29T14:30:00",
+                "origin": {"platform": "legacychat", "chat_id": "123", "chat_type": "dm"},
+            }
+        }
+        (sessions_dir / "sessions.json").write_text(json.dumps(entries))
+        monkeypatch.setenv("HERMES_HOME", str(sessions_dir.parent))
+
+        import mcp_serve
+        server = mcp_serve.create_mcp_server(event_bridge=mcp_serve.EventBridge())
+        result = _run_tool(server, "channels_list")
+        assert result["count"] == 0
+
     def test_channels_with_directory(self, mcp_server_e2e, _event_loop, monkeypatch):
         import mcp_serve
         monkeypatch.setattr(mcp_serve, "_load_channel_directory", lambda: {
@@ -739,6 +958,48 @@ class TestE2EChannelsList:
         # The tool closure already captured the old mock, so test the function directly
         directory = mcp_serve._load_channel_directory()
         assert len(directory["telegram"]) == 2
+
+    def test_channels_with_directory_skip_unknown_platforms(self, mcp_server_e2e, _event_loop, monkeypatch):
+        import mcp_serve
+        monkeypatch.setattr(mcp_serve, "_load_channel_directory", lambda: {
+            "legacychat": [{"id": "123", "name": "Legacy", "type": "dm"}],
+            "telegram": [{"id": "123456", "name": "Alice", "type": "dm"}],
+        })
+        server, _ = mcp_server_e2e
+        result = _run_tool(server, "channels_list")
+        assert result["count"] == 1
+        assert result["channels"][0]["platform"] == "telegram"
+
+    def test_channels_with_directory_include_registered_plugin_platforms_after_lazy_discovery(
+        self,
+        mcp_server_e2e,
+        _event_loop,
+        monkeypatch,
+    ):
+        platform_name = "mcpdirectorychat"
+        import mcp_serve
+        from gateway.platform_registry import platform_registry
+
+        entry = _plugin_platform_entry(platform_name)
+
+        def fake_discover_plugins(force: bool = False):
+            del force
+            platform_registry.register(entry)
+
+        monkeypatch.setattr("hermes_cli.plugins.discover_plugins", fake_discover_plugins)
+        monkeypatch.setattr(mcp_serve, "_plugin_discovery_done", False)
+        monkeypatch.setattr(mcp_serve, "_load_channel_directory", lambda: {
+            platform_name: [{"id": "123", "name": "Plugin User", "type": "dm"}],
+        })
+
+        try:
+            server, _ = mcp_server_e2e
+            result = _run_tool(server, "channels_list")
+        finally:
+            platform_registry.unregister(platform_name)
+
+        assert result["count"] == 1
+        assert result["channels"][0]["platform"] == platform_name
 
 
 class TestE2EPermissions:

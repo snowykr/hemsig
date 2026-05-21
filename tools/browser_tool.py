@@ -1903,7 +1903,7 @@ def browser_snapshot(
 
         # Merge supervisor state (pending dialogs + frame tree) when a CDP
         # supervisor is attached to this task. No-op otherwise. See
-        # website/docs/developer-guide/browser-supervisor.md.
+        # the browser supervisor design notes.
         try:
             from tools.browser_supervisor import SUPERVISOR_REGISTRY  # type: ignore[import-not-found]
             _supervisor = SUPERVISOR_REGISTRY.get(effective_task_id)

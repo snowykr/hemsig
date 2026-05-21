@@ -131,16 +131,42 @@ def test_wait_for_process_kills_subprocess_on_keyboardinterrupt():
                     except (psutil.NoSuchProcess, psutil.AccessDenied):
                         continue
             except ImportError:
-                # Fall back to ps
+                # Fall back to ps. Keep the lookup scoped to this pytest
+                # worker's descendants; a global "sleep 30" match can come
+                # from another xdist worker and make us assert against an
+                # unrelated process group.
                 ps = subprocess.run(
-                    ["ps", "-eo", "pid,ppid,pgid,cmd"], capture_output=True, text=True,
+                    ["ps", "-eo", "pid=,ppid=,pgid=,args="],
+                    capture_output=True,
+                    text=True,
                 )
+                children_by_ppid = {}
+                cmd_by_pid = {}
                 for line in ps.stdout.splitlines():
-                    if "sleep 30" in line and "grep" not in line:
-                        parts = line.split()
-                        if parts and parts[0].isdigit():
-                            target_pid = int(parts[0])
-                            break
+                    parts = line.split(None, 3)
+                    if len(parts) < 4:
+                        continue
+                    try:
+                        pid = int(parts[0])
+                        ppid = int(parts[1])
+                    except ValueError:
+                        continue
+                    children_by_ppid.setdefault(ppid, []).append(pid)
+                    cmd_by_pid[pid] = parts[3]
+
+                stack = list(children_by_ppid.get(os.getpid(), []))
+                descendants = set(stack)
+                while stack:
+                    child = stack.pop()
+                    for grandchild in children_by_ppid.get(child, []):
+                        if grandchild not in descendants:
+                            descendants.add(grandchild)
+                            stack.append(grandchild)
+
+                for pid in descendants:
+                    if "sleep 30" in cmd_by_pid.get(pid, ""):
+                        target_pid = pid
+                        break
             if target_pid:
                 break
             time.sleep(0.1)

@@ -1347,13 +1347,15 @@ class TestSignalSendMultipleImages:
         adapter._rpc = mock_rpc
         adapter._stop_typing_indicator = AsyncMock()
 
-        await adapter.send_multiple_images(
+        result = await adapter.send_multiple_images(
             chat_id="+155****4567",
             images=[(f"file://{tmp_path}/missing_a.png", ""),
                     (f"file://{tmp_path}/missing_b.png", "")],
         )
 
         assert captured == []
+        assert result.success is False
+        assert result.error == "No valid Signal images remained after validation"
 
     @pytest.mark.asyncio
     async def test_single_batch_under_limit(self, monkeypatch, tmp_path):
@@ -1470,10 +1472,63 @@ class TestSignalSendMultipleImages:
         _patch_scheduler_sleep(monkeypatch, sleep_calls)
 
         images = _make_image_files(tmp_path, 33)  # forces 2 batches
-        await adapter.send_multiple_images(chat_id="+155****4567", images=images)
+        result = await adapter.send_multiple_images(chat_id="+155****4567", images=images)
 
         # 2 attempts on batch 0 + 1 on batch 1
         assert len(captured) == 3
+        assert result.success is False
+        assert result.error == "Signal image batches were not delivered"
+
+    @pytest.mark.asyncio
+    async def test_late_batch_failure_after_early_success_returns_error(
+        self, monkeypatch, tmp_path
+    ):
+        from gateway.platforms.signal import SignalRateLimitError
+
+        adapter = _make_signal_adapter(monkeypatch)
+        mock_rpc, captured = _stub_rpc_responses([
+            {"timestamp": 1},
+            SignalRateLimitError("[429]", retry_after=4.0),
+            SignalRateLimitError("[429]", retry_after=4.0),
+        ])
+        adapter._rpc = mock_rpc
+        adapter._stop_typing_indicator = AsyncMock()
+
+        sleep_calls: list = []
+        _patch_scheduler_sleep(monkeypatch, sleep_calls)
+
+        result = await adapter.send_multiple_images(
+            chat_id="+155****4567",
+            images=_make_image_files(tmp_path, 33),
+        )
+
+        assert len(captured) == 3
+        assert result.success is False
+        assert result.error == "Signal image batches were not delivered"
+
+    @pytest.mark.asyncio
+    async def test_all_batches_failed_returns_error(self, monkeypatch, tmp_path):
+        from gateway.platforms.signal import SignalRateLimitError
+
+        adapter = _make_signal_adapter(monkeypatch)
+        mock_rpc, captured = _stub_rpc_responses([
+            SignalRateLimitError("[429]", retry_after=4.0),
+            SignalRateLimitError("[429]", retry_after=4.0),
+        ])
+        adapter._rpc = mock_rpc
+        adapter._stop_typing_indicator = AsyncMock()
+
+        sleep_calls: list = []
+        _patch_scheduler_sleep(monkeypatch, sleep_calls)
+
+        result = await adapter.send_multiple_images(
+            chat_id="+155****4567",
+            images=_make_image_files(tmp_path, 3),
+        )
+
+        assert len(captured) == 2
+        assert result.success is False
+        assert result.error == "Signal image batches were not delivered"
 
     @pytest.mark.asyncio
     async def test_full_batch_emits_pacing_notice_for_followup(

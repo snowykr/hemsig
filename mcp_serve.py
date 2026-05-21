@@ -42,6 +42,9 @@ from typing import Dict, List, Optional
 
 logger = logging.getLogger("hermes.mcp_serve")
 
+_plugin_discovery_lock = threading.Lock()
+_plugin_discovery_done = False
+
 # ---------------------------------------------------------------------------
 # Lazy MCP SDK import
 # ---------------------------------------------------------------------------
@@ -93,6 +96,40 @@ def _load_sessions_index() -> dict:
     except Exception as e:
         logger.debug("Failed to load sessions.json: %s", e)
         return {}
+
+
+def _valid_session_platform_name(value: str) -> bool:
+    """Return True when *value* resolves to a currently supported platform key."""
+    if not isinstance(value, str) or not value.strip():
+        return False
+    try:
+        _ensure_plugin_platforms_discovered()
+        from gateway.config import Platform
+
+        _ = Platform(value.strip().lower())
+        return True
+    except ValueError:
+        return False
+
+
+def _ensure_plugin_platforms_discovered() -> None:
+    """Load plugin platform registrations before validating dynamic platform keys."""
+    global _plugin_discovery_done
+    if _plugin_discovery_done:
+        return
+
+    with _plugin_discovery_lock:
+        if _plugin_discovery_done:
+            return
+        try:
+            from hermes_cli.plugins import discover_plugins
+
+            discover_plugins()
+        except Exception as e:
+            logger.debug("Plugin discovery unavailable during MCP platform validation: %s", e)
+            return
+
+        _plugin_discovery_done = True
 
 
 def _load_channel_directory() -> dict:
@@ -360,6 +397,11 @@ class EventBridge:
         entries = self._cached_sessions_index
 
         for session_key, entry in entries.items():
+            origin = entry.get("origin", {})
+            entry_platform = entry.get("platform") or origin.get("platform", "")
+            if not _valid_session_platform_name(entry_platform):
+                continue
+
             session_id = entry.get("session_id", "")
             if not session_id:
                 continue
@@ -440,8 +482,8 @@ def create_mcp_server(event_bridge: Optional[EventBridge] = None) -> "FastMCP":
         "hermes",
         instructions=(
             "Hermes Agent messaging bridge. Use these tools to interact with "
-            "conversations across Telegram, Discord, Slack, WhatsApp, Signal, "
-            "Matrix, and other connected platforms."
+            "conversations across Telegram, Discord, Slack, Signal, Email, "
+            "Home Assistant, Webhooks, API server, and other connected platforms."
         ),
     )
 
@@ -471,6 +513,8 @@ def create_mcp_server(event_bridge: Optional[EventBridge] = None) -> "FastMCP":
         for key, entry in entries.items():
             origin = entry.get("origin", {})
             entry_platform = entry.get("platform") or origin.get("platform", "")
+            if not _valid_session_platform_name(entry_platform):
+                continue
 
             if platform and entry_platform.lower() != platform.lower():
                 continue
@@ -519,10 +563,14 @@ def create_mcp_server(event_bridge: Optional[EventBridge] = None) -> "FastMCP":
             return json.dumps({"error": f"Conversation not found: {session_key}"})
 
         origin = entry.get("origin", {})
+        entry_platform = entry.get("platform") or origin.get("platform", "")
+        if not _valid_session_platform_name(entry_platform):
+            return json.dumps({"error": f"Conversation not found: {session_key}"})
+
         return json.dumps({
             "session_key": session_key,
             "session_id": entry.get("session_id", ""),
-            "platform": entry.get("platform") or origin.get("platform", ""),
+            "platform": entry_platform,
             "chat_type": entry.get("chat_type", origin.get("chat_type", "")),
             "display_name": entry.get("display_name", ""),
             "user_name": origin.get("user_name", ""),
@@ -555,6 +603,11 @@ def create_mcp_server(event_bridge: Optional[EventBridge] = None) -> "FastMCP":
         entries = _load_sessions_index()
         entry = entries.get(session_key)
         if not entry:
+            return json.dumps({"error": f"Conversation not found: {session_key}"})
+
+        origin = entry.get("origin", {})
+        entry_platform = entry.get("platform") or origin.get("platform", "")
+        if not _valid_session_platform_name(entry_platform):
             return json.dumps({"error": f"Conversation not found: {session_key}"})
 
         session_id = entry.get("session_id", "")
@@ -611,6 +664,11 @@ def create_mcp_server(event_bridge: Optional[EventBridge] = None) -> "FastMCP":
         entries = _load_sessions_index()
         entry = entries.get(session_key)
         if not entry:
+            return json.dumps({"error": f"Conversation not found: {session_key}"})
+
+        origin = entry.get("origin", {})
+        entry_platform = entry.get("platform") or origin.get("platform", "")
+        if not _valid_session_platform_name(entry_platform):
             return json.dumps({"error": f"Conversation not found: {session_key}"})
 
         session_id = entry.get("session_id", "")
@@ -754,6 +812,8 @@ def create_mcp_server(event_bridge: Optional[EventBridge] = None) -> "FastMCP":
             for key, entry in entries.items():
                 origin = entry.get("origin", {})
                 p = entry.get("platform") or origin.get("platform", "")
+                if not _valid_session_platform_name(p):
+                    continue
                 chat_id = origin.get("chat_id", "")
                 if not p or not chat_id:
                     continue
@@ -773,6 +833,8 @@ def create_mcp_server(event_bridge: Optional[EventBridge] = None) -> "FastMCP":
 
         channels = []
         for plat, entries_list in directory.items():
+            if not _valid_session_platform_name(plat):
+                continue
             if platform and plat.lower() != platform.lower():
                 continue
             if isinstance(entries_list, list):

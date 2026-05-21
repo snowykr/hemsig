@@ -783,9 +783,10 @@ class TestPromptBuilderConstants:
         assert len(DEFAULT_AGENT_IDENTITY) > 50
 
     def test_platform_hints_known_platforms(self):
-        assert "whatsapp" in PLATFORM_HINTS
         assert "telegram" in PLATFORM_HINTS
         assert "discord" in PLATFORM_HINTS
+        assert "signal" in PLATFORM_HINTS
+        assert "email" in PLATFORM_HINTS
         assert "cron" in PLATFORM_HINTS
         assert "cli" in PLATFORM_HINTS
 
@@ -806,25 +807,6 @@ class TestPromptBuilderConstants:
         # Messaging hints should still advertise MEDIA: positively (sanity
         # check that this test is calibrated correctly).
         assert "include MEDIA:" in PLATFORM_HINTS["telegram"]
-
-    def test_platform_hints_mattermost(self):
-        hint = PLATFORM_HINTS["mattermost"]
-        assert "Mattermost" in hint
-        assert "MEDIA:" in hint
-        assert "Markdown" in hint
-
-    def test_platform_hints_matrix(self):
-        hint = PLATFORM_HINTS["matrix"]
-        assert "Matrix" in hint
-        assert "MEDIA:" in hint
-        assert "Markdown" in hint
-
-    def test_platform_hints_feishu(self):
-        hint = PLATFORM_HINTS["feishu"]
-        assert "Feishu" in hint
-        assert "MEDIA:" in hint
-        assert "Markdown" in hint
-
 
 # =========================================================================
 # Environment hints
@@ -1086,6 +1068,5 @@ class TestOpenAIModelExecutionGuidance:
 # =========================================================================
 # Budget warning history stripping
 # =========================================================================
-
 
 
